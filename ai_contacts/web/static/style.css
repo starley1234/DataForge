@@ -1,0 +1,60 @@
+:root {
+    --bs-primary: #3b82f6;
+    --bs-primary-rgb: 59, 130, 246;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1e293b;
+    background-color: #f8fafc !important;
+}
+
+.metric-card {
+    border-radius: 12px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08) !important;
+}
+
+.metric-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+}
+
+.card {
+    border-radius: 12px;
+}
+
+.table th {
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+.table td {
+    padding-top: 14px;
+    padding-bottom: 14px;
+    font-size: 0.9rem;
+}
+
+.copy-btn {
+    transition: background-color 0.15s ease;
+}
+
+.badge-cat {
+    font-size: 0.75rem;
+    padding: 4px 8px;
+    border-radius: 6px;
+}
