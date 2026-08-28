@@ -1,5 +1,5 @@
 import pytest
-from validator import (
+from core.validator import (
     validate_email_syntax,
     is_role_based_email,
     check_domain_mx,

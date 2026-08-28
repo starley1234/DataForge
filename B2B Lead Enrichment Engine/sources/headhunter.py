@@ -2,8 +2,8 @@ import re
 import logging
 from typing import Optional, List, Dict, Any
 import httpx
-from email_generator import clean_domain
-from validator import validate_email_syntax, normalize_phone
+from core.email_generator import clean_domain
+from core.validator import validate_email_syntax, normalize_phone
 
 logger = logging.getLogger("headhunter_intel")
 

@@ -8,8 +8,8 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 import pandas as pd
-from models import BatchTaskORM, init_db
-from config import settings
+from core.models import BatchTaskORM, init_db
+from core.config import settings
 
 logger = logging.getLogger("batch_processor")
 

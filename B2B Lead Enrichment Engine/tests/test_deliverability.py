@@ -1,5 +1,5 @@
 import pytest
-from deliverability import analyze_domain_deliverability
+from core.deliverability import analyze_domain_deliverability
 
 
 def test_analyze_domain_empty():

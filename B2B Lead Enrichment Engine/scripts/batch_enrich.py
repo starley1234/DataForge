@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
-from engine import EnrichmentEngine
-from batch_processor import BatchProcessor
-from exporter import (
+from core.engine import EnrichmentEngine
+from core.batch_processor import BatchProcessor
+from core.exporter import (
     export_to_excel, export_to_csv, export_to_amocrm_csv,
     export_to_bitrix24_csv, export_to_hubspot_csv, export_to_vcard
 )

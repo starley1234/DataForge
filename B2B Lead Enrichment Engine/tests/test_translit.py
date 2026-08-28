@@ -1,5 +1,5 @@
 import pytest
-from translit import (
+from core.translit import (
     transliterate,
     transliterate_variants,
     split_russian_name,

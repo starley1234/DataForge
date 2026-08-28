@@ -1,5 +1,5 @@
 import pytest
-from domain_finder import DomainFinder, clean_company_name_for_search
+from core.domain_finder import DomainFinder, clean_company_name_for_search
 
 
 def test_clean_company_name():

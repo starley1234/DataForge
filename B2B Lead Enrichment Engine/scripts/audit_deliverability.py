@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from deliverability import analyze_domain_deliverability
+from core.deliverability import analyze_domain_deliverability
 
 console = Console()
 

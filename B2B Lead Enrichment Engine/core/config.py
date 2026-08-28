@@ -10,8 +10,8 @@ class Settings:
     APP_VERSION: str = "2.2.0-prod"
     APP_DESCRIPTION: str = "Корпоративная платформа поиска, обогащения, скоринга и валидации контактов ЛПР предприятий РФ"
     
-    # База данных: локальный SQLite по умолчанию, в продакшене PostgreSQL
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///leads_b2b.db")
+    # База данных: локальный SQLite по умолчанию в папке data/, в продакшене PostgreSQL
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///data/leads_b2b.db")
     
     # Внешние API и ключи
     DADATA_API_KEY: str = os.getenv("DADATA_API_KEY", "")

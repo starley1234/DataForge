@@ -1,5 +1,5 @@
 import pytest
-from company_sources import MockCompanyRegistry, DaDataClient
+from core.company_sources import MockCompanyRegistry, DaDataClient
 
 
 def test_mock_registry_completeness():

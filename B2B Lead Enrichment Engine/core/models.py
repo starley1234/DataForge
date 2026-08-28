@@ -309,13 +309,19 @@ def _migrate_db(engine):
             conn.commit()
 
 
-def init_db(db_path: str = "sqlite:///leads_b2b.db"):
+def init_db(db_path: str = "sqlite:///data/leads_b2b.db"):
     """
     Инициализирует подключение к базе данных.
     Поддерживает SQLite и PostgreSQL с автоматической миграцией.
     """
     connect_args = {}
-    if db_path.startswith("sqlite"):
+    if db_path.startswith("sqlite:///"):
+        file_path = db_path.replace("sqlite:///", "")
+        dir_name = os.path.dirname(file_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        connect_args["check_same_thread"] = False
+    elif db_path.startswith("sqlite"):
         connect_args["check_same_thread"] = False
 
     engine = create_engine(

@@ -4,7 +4,7 @@ from sources.msp_registry import MSPRegistryClient
 from sources.tech_stack import TechStackDetector
 from sources.financial_scoring import FinancialScoringEngine
 from sources.headhunter import HeadHunterClient
-from models import Company
+from core.models import Company
 
 
 def test_msp_registry_classification():

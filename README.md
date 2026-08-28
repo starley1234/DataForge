@@ -9,31 +9,59 @@
 
 ---
 
-## Краткий обзор модулей
+## Лаконичная структура проекта
 
-- **`B2B Lead Enrichment Engine/sources/`**: Модульные сборщики и харвестеры данных:
-  - `fns_egrul.py`: Официальный реестр ЕГРЮЛ/ЕГРИП ФНС РФ (JSON и PDF-выписки).
-  - `headhunter.py`: HeadHunter API (открытые вакансии, динамика найма, отраслевые теги).
-  - `msp_registry.py`: Реестр МСП по 209-ФЗ (категории Микро, Малое, Среднее).
-  - `tech_stack.py`: Детекция CMS (1С-Битрикс, Tilda, WP) и CRM/виджетов (amoCRM, Bitrix24).
-  - `financial_scoring.py`: Скоринг надежности (Solvency Score 0-100) и уровни рисков.
-  - `company_registry.py`: Эталонный реестр предприятий РФ и DaData интеграция.
-
-- **`B2B Lead Enrichment Engine/scripts/`**: Готовые к работе CLI-скрипты:
-  - `enrich_inn.py`: Прямое обогащение по ИНН/ОГРН.
-  - `enrich_domain.py`: Краулинг сайта компании, извлечение команды и технологий.
-  - `harvest_industry.py`: Массовый сбор лидов по отраслям и вакансиям.
-  - `batch_enrich.py`: Высокоскоростная пакетная обработка файлов Excel и CSV.
-  - `audit_deliverability.py`: Аудит DNS MX, SPF, DMARC, DKIM и спам-баз (RBL).
-  - `generate_sales_pack.py`: Генерация полного B2B Sales Pack (8 писем, скрипт звонка, vCard).
-
-- **`B2B Lead Enrichment Engine/`**:
-  - `web_app.py`: Полнофункциональный веб-интерфейс, REST API и Prometheus метрики.
-  - `cli.py`: Интерактивный CLI с цветными таблицами Rich.
-  - `engine.py` & `harvester.py`: Ядро оркестрации и параллельного сбора данных.
-  - `email_generator.py`: 20+ корпоративных формул генерации email + Pattern Learning.
-  - `validator.py` & `translit.py`: Валидация контактов, таймзоны (MSK-1..MSK+9), ГОСТ/ICAO.
-  - `exporter.py`: Экспорт в Excel (.xlsx), CSV (BOM), amoCRM, Битрикс24, HubSpot, vCard.
+```
+B2B Lead Enrichment Engine/
+├── core/                         # Ядро системы (движок, валидаторы, скоринг, генераторы)
+│   ├── config.py                 # Настройки и переменные окружения
+│   ├── models.py                 # Pydantic v2 & SQLAlchemy схемы
+│   ├── engine.py                 # Главный оркестратор обогащения
+│   ├── harvester.py              # Универсальный B2B комбайн параллельного сбора
+│   ├── translit.py               # Транслитерация ГОСТ/ICAO и парсинг имен
+│   ├── email_generator.py        # 20+ формул email + Pattern Learning
+│   ├── validator.py              # Валидация Email/Phone, таймзоны (MSK-1..MSK+9)
+│   ├── deliverability.py         # Аудит MX, SPF, DMARC, DKIM, RBL
+│   ├── domain_finder.py          # Интеллектуальный поиск корпоративных сайтов
+│   ├── scraper.py                # Веб-краулинг страниц команды и соцсетей
+│   ├── batch_processor.py        # Фоновая асинхронная обработка файлов
+│   └── exporter.py               # Экспорт (Excel, amoCRM, Bitrix24, vCard, скрипты)
+│
+├── sources/                      # Модульные сборщики из официальных реестров
+│   ├── fns_egrul.py              # Официальный ЕГРЮЛ/ЕГРИП ФНС РФ (JSON + PDF)
+│   ├── headhunter.py             # HeadHunter API (вакансии, темпы роста)
+│   ├── msp_registry.py           # Реестр МСП 209-ФЗ (микро, малое, среднее)
+│   ├── tech_stack.py             # Детектор CMS (Битрикс, Tilda) и CRM (amo, b24)
+│   ├── financial_scoring.py      # Скоринг надежности (0-100) и оценка рисков
+│   └── company_registry.py       # Реестр предприятий РФ и DaData
+│
+├── scripts/                      # Готовые автономные CLI-скрипты
+│   ├── enrich_inn.py             # Обогащение по ИНН/ОГРН
+│   ├── enrich_domain.py          # Обогащение по домену/сайту
+│   ├── harvest_industry.py       # Сбор лидов по отраслям и городам
+│   ├── batch_enrich.py           # Пакетная обработка файлов Excel/CSV
+│   ├── audit_deliverability.py   # Аудит доставляемости домена
+│   └── generate_sales_pack.py    # Генерация B2B Sales Pack (8 писем, звонок, vCard)
+│
+├── data/                         # Данные, база SQLite и примеры экспорта
+│   ├── leads_b2b.db              # База данных SQLite
+│   ├── leads.csv                 # Экспорт базы (CSV BOM)
+│   ├── leads.xlsx                # Экспорт базы (Excel)
+│   ├── leads_amocrm.csv          # Экспорт для amoCRM
+│   └── leads_bitrix24.csv        # Экспорт для Битрикс24
+│
+├── tests/                        # 67 модульных и интеграционных тестов Pytest
+│
+├── web_app.py                    # Web UI Dashboard & REST API
+├── cli.py                        # Главный консольный интерфейс
+├── docker-compose.yml            # Docker окружение
+├── Dockerfile                    # Сборка контейнера
+├── pyproject.toml                # Конфигурация проекта и pytest
+├── requirements.txt              # Зависимости
+├── setup.py                      # Установка пакета
+├── .env.example                  # Пример конфигурации
+└── README.md                     # Документация
+```
 
 ---
 

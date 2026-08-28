@@ -1,7 +1,7 @@
 import pytest
 import time
-from batch_processor import BatchProcessor
-from engine import EnrichmentEngine
+from core.batch_processor import BatchProcessor
+from core.engine import EnrichmentEngine
 
 
 @pytest.fixture

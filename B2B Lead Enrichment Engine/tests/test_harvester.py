@@ -1,5 +1,5 @@
 import pytest
-from harvester import UniversalB2BHarvester
+from core.harvester import UniversalB2BHarvester
 
 
 def test_universal_harvester_enrichment():

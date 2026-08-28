@@ -4,15 +4,15 @@ from urllib.parse import urlparse
 from datetime import datetime
 from sqlalchemy import desc, func, or_
 
-from models import init_db, CompanyORM, DecisionMakerORM, Company, DecisionMaker
-from translit import split_russian_name
-from email_generator import generate_email_permutations, detect_pattern_from_sample, clean_domain
-from validator import verify_email_full, normalize_phone, check_domain_mx
-from scraper import WebsiteScraper
-from domain_finder import DomainFinder
-from company_sources import DaDataClient, MockCompanyRegistry
-from fns_source import FNSEgrulClient
-from config import settings
+from core.models import init_db, CompanyORM, DecisionMakerORM, Company, DecisionMaker
+from core.translit import split_russian_name
+from core.email_generator import generate_email_permutations, detect_pattern_from_sample, clean_domain
+from core.validator import verify_email_full, normalize_phone, check_domain_mx
+from core.scraper import WebsiteScraper
+from core.domain_finder import DomainFinder
+from core.company_sources import DaDataClient, MockCompanyRegistry
+from core.fns_source import FNSEgrulClient
+from core.config import settings
 
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("b2b_engine")

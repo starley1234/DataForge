@@ -10,38 +10,72 @@
 
 ```
 B2B Lead Enrichment Engine/
-├── sources/                      # Модульные сборщики данных и интеграции с реестрами
-│   ├── fns_egrul.py              # Официальный ЕГРЮЛ/ЕГРИП ФНС РФ (JSON + выписки PDF)
-│   ├── headhunter.py             # HeadHunter API: вакансии, рост штата, отраслевые теги
-│   ├── msp_registry.py           # Реестр субъектов МСП (209-ФЗ: Микро, Малое, Среднее)
-│   ├── tech_stack.py             # Детектор стека, CMS (1С-Битрикс, Tilda, WP) и CRM (amoCRM, Bitrix24)
-│   ├── financial_scoring.py      # Скоринг надежности (Solvency Score 0-100) и оценка рисков
-│   └── company_registry.py       # Эталонный B2B реестр предприятий РФ и DaData интеграция
+├── core/                         # Ядро системы (движок, валидаторы, скоринг, генераторы)
+│   ├── __init__.py
+│   ├── config.py                 # Настройки и переменные окружения
+│   ├── models.py                 # Pydantic v2 & SQLAlchemy схемы
+│   ├── engine.py                 # Главный оркестратор обогащения
+│   ├── harvester.py              # Универсальный B2B комбайн параллельного сбора
+│   ├── translit.py               # Транслитерация ГОСТ/ICAO и парсинг имен
+│   ├── email_generator.py        # 20+ формул email + Pattern Learning
+│   ├── validator.py              # Валидация Email/Phone, таймзоны (MSK-1..MSK+9)
+│   ├── deliverability.py         # Аудит MX, SPF, DMARC, DKIM, RBL
+│   ├── domain_finder.py          # Интеллектуальный поиск корпоративных сайтов
+│   ├── scraper.py                # Веб-краулинг страниц команды и соцсетей
+│   ├── batch_processor.py        # Фоновая асинхронная обработка файлов
+│   └── exporter.py               # Экспорт (Excel, amoCRM, Bitrix24, vCard, скрипты)
 │
-├── scripts/                      # Готовые автономные CLI-скрипты для продакшена
-│   ├── enrich_inn.py             # Обогащение по ИНН/ОГРН напрямую из реестров
-│   ├── enrich_domain.py          # Краулинг сайта, извлечение команды и детекция CMS/CRM
-│   ├── harvest_industry.py       # Сбор лидов по отраслям, городам и открытым вакансиям
-│   ├── batch_enrich.py           # Высокоскоростной batch-процессинг файлов Excel/CSV
-│   ├── audit_deliverability.py   # Аудит безопасности домена (MX, SPF, DMARC, DKIM, RBL)
-│   └── generate_sales_pack.py    # Генерация полного B2B Sales Pack (8 писем, скрипт звонка, vCard)
+├── sources/                      # Модульные сборщики из официальных реестров
+│   ├── __init__.py
+│   ├── fns_egrul.py              # Официальный ЕГРЮЛ/ЕГРИП ФНС РФ (JSON + PDF)
+│   ├── headhunter.py             # HeadHunter API (вакансии, темпы роста)
+│   ├── msp_registry.py           # Реестр МСП 209-ФЗ (микро, малое, среднее)
+│   ├── tech_stack.py             # Детектор CMS (Битрикс, Tilda) и CRM (amo, b24)
+│   ├── financial_scoring.py      # Скоринг надежности (0-100) и оценка рисков
+│   └── company_registry.py       # Реестр предприятий РФ и DaData
 │
-├── engine.py                     # Центральный движок оркестрации обогащения
-├── harvester.py                  # Универсальный комбайн параллельного сбора B2B-лидов
-├── models.py                     # SQLAlchemy ORM + Pydantic v2 схемы данных + миграции
-├── translit.py                   # Транслитерация ГОСТ/ICAO, парсер ФИО, определение пола
-├── email_generator.py            # Корпоративные email по 20+ формулам + Pattern Learning
-├── validator.py                  # Валидация Email/Phone, кэш DNS MX, таймзоны и Calling Window
-├── deliverability.py             # Аудит MX, SPF, DMARC, DKIM, RBL спам-баз и Catch-All
-├── domain_finder.py              # Автоматический поиск корпоративного веб-сайта
-├── scraper.py                    # Глубокий краулер сайтов, страниц руководства и соцсетей
-├── batch_processor.py            # Асинхронный диспетчер пакетных задач с метриками скорости
-├── exporter.py                   # Экспорт: Excel (.xlsx), CSV (BOM), amoCRM, Битрикс24, HubSpot, vCard
-├── cli.py                        # Интерактивная консольная утилита с таблицами Rich
-├── web_app.py                    # FastAPI сервер + REST API + Prometheus + Web Dashboard
-├── config.py                     # Настройки окружения (Pydantic BaseSettings)
-├── docker-compose.yml            # Продакшн-развертывание (App + PostgreSQL 16)
-└── tests/                        # Полный набор автотестов Pytest (67 тестов)
+├── scripts/                      # Готовые автономные CLI-скрипты
+│   ├── __init__.py
+│   ├── enrich_inn.py             # Обогащение по ИНН/ОГРН
+│   ├── enrich_domain.py          # Обогащение по домену/сайту
+│   ├── harvest_industry.py       # Сбор лидов по отраслям и городам
+│   ├── batch_enrich.py           # Пакетная обработка файлов Excel/CSV
+│   ├── audit_deliverability.py   # Аудит доставляемости домена
+│   └── generate_sales_pack.py    # Генерация B2B Sales Pack (8 писем, звонок, vCard)
+│
+├── data/                         # Данные, база SQLite и примеры экспорта
+│   ├── leads_b2b.db              # База данных SQLite
+│   ├── leads.csv                 # Экспорт базы (CSV BOM)
+│   ├── leads.xlsx                # Экспорт базы (Excel)
+│   ├── leads_amocrm.csv          # Экспорт для amoCRM
+│   └── leads_bitrix24.csv        # Экспорт для Битрикс24
+│
+├── tests/                        # 67 модульных и интеграционных тестов
+│   ├── test_api.py
+│   ├── test_batch_processor.py
+│   ├── test_company_sources.py
+│   ├── test_deliverability.py
+│   ├── test_domain_finder.py
+│   ├── test_email_generator.py
+│   ├── test_engine.py
+│   ├── test_exporter.py
+│   ├── test_fns.py
+│   ├── test_harvester.py
+│   ├── test_scraper.py
+│   ├── test_scripts.py
+│   ├── test_sources.py
+│   ├── test_translit.py
+│   └── test_validator.py
+│
+├── web_app.py                    # Web UI Dashboard & REST API
+├── cli.py                        # Главный консольный интерфейс
+├── docker-compose.yml            # Docker окружение
+├── Dockerfile                    # Сборка контейнера
+├── pyproject.toml                # Конфигурация проекта и pytest
+├── requirements.txt              # Зависимости
+├── setup.py                      # Установка пакета
+├── .env.example                  # Пример конфигурации
+└── README.md                     # Документация
 ```
 
 ---

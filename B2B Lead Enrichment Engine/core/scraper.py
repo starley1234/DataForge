@@ -5,8 +5,8 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 import urllib3
-from validator import normalize_phone, validate_email_syntax, is_role_based_email
-from config import settings
+from core.validator import normalize_phone, validate_email_syntax, is_role_based_email
+from core.config import settings
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")

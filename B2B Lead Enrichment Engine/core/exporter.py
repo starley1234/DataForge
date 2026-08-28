@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from translit import split_russian_name, get_salutation
+from core.translit import split_russian_name, get_salutation
 
 
 def export_to_csv(leads: List[Dict[str, Any]], filepath: str) -> str:

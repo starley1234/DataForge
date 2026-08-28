@@ -1,14 +1,40 @@
 """
-B2B Lead Generation & Decision Maker Enrichment Engine for Russian Enterprises.
-
-Modules:
-- models.py: Data models and database schemas (SQLite / SQLAlchemy)
-- translit.py: Russian Cyrillic to Latin transliteration for email generation
-- company_sources.py: Fetching company data (DaData / Rusprofile / open registries)
-- email_generator.py: Generating email patterns based on full name and domain
-- validator.py: Validating emails (syntax, MX DNS, disposable check) and phones (E.164)
-- scraper.py: Scraping website contacts, leadership and social links
-- engine.py: Main pipeline orchestrator
-- cli.py: Command line interface and export to CSV / Excel / JSON
-- web_app.py: Web dashboard with FastAPI / HTML UI
+B2B Lead Enrichment & Intelligence Engine (Enterprise Edition)
 """
+
+from core import (
+    settings,
+    Settings,
+    Company,
+    DecisionMaker,
+    CompanyUpdate,
+    DecisionMakerUpdate,
+    CompanyORM,
+    DecisionMakerORM,
+    BatchTaskORM,
+    BatchTaskStatus,
+    init_db,
+    transliterate,
+    split_russian_name,
+    get_salutation,
+    generate_email_permutations,
+    verify_email_full,
+    normalize_phone,
+    analyze_domain_deliverability,
+    find_domain_by_query,
+    WebsiteScraper,
+    EnrichmentEngine,
+    UniversalB2BHarvester,
+    BatchProcessor,
+    export_to_excel,
+    export_to_csv,
+    export_to_amocrm_csv,
+    export_to_bitrix24_csv,
+    export_to_hubspot_csv,
+    export_to_vcard,
+    export_to_json,
+    generate_outreach_email,
+    generate_cold_calling_script
+)
+
+__version__ = "2.2.0-prod"

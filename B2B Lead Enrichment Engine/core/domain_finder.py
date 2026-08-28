@@ -4,8 +4,8 @@ from typing import Optional, List, Set
 from urllib.parse import urlparse, unquote
 import httpx
 from bs4 import BeautifulSoup
-from translit import transliterate
-from validator import check_domain_mx
+from core.translit import transliterate
+from core.validator import check_domain_mx
 
 logger = logging.getLogger("domain_finder")
 
@@ -32,6 +32,23 @@ EXCLUDED_DOMAINS: Set[str] = {
 
 
 def clean_company_name_for_search(name: str) -> str:
+    """Очищает название компании от кавычек и ОПФ."""
+    clean = re.sub(r'^(ООО|АО|ПАО|ЗАО|ИП|НКО|МУП|ГУП|ОАО)\s+', '', name, flags=re.I).strip(' "\'«»')
+    return clean
+
+
+def find_domain_by_query(company_name: str, inn: Optional[str] = None, region: Optional[str] = None) -> Optional[str]:
+    """Быстрый поиск корпоративного домена."""
+    finder = DomainFinder()
+    return finder.find_domain(company_name, inn=inn, region=region)
+
+
+def is_aggregator_domain(domain: str) -> bool:
+    """Проверка, является ли домен агрегатором / реестром."""
+    finder = DomainFinder()
+    return not finder._is_valid_corporate_domain(domain)
+
+
     """Удаляет организационно-правовые формы, кавычки и шум для чистого поиска."""
     if not name:
         return ""

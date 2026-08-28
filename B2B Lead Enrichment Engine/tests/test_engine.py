@@ -1,6 +1,6 @@
 import pytest
-from engine import EnrichmentEngine, calculate_company_solvency_score
-from models import Company, DecisionMaker
+from core.engine import EnrichmentEngine, calculate_company_solvency_score
+from core.models import Company, DecisionMaker
 
 
 @pytest.fixture

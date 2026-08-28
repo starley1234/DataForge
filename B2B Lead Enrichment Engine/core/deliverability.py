@@ -1,8 +1,8 @@
 import re
 from typing import Dict, Any, Optional, List, Tuple
 import dns.resolver
-from email_generator import clean_domain
-from validator import check_domain_mx
+from core.email_generator import clean_domain
+from core.validator import check_domain_mx
 
 # Популярные DNSBL (Spam Blacklist) списки
 RBL_SERVERS = [

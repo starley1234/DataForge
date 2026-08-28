@@ -1,6 +1,6 @@
 import re
 from typing import List, Dict, Optional, Any
-from translit import split_russian_name, transliterate, transliterate_variants
+from core.translit import split_russian_name, transliterate, transliterate_variants
 
 
 def clean_domain(domain: str) -> str:
@@ -202,3 +202,7 @@ def generate_department_emails(domain: str) -> List[Dict[str, str]]:
         {"email": f"{prefix}@{clean_dom}", "title": desc, "type": "department"}
         for prefix, desc in dept_prefixes
     ]
+
+
+detect_email_pattern = detect_pattern_from_sample
+

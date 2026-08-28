@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from engine import EnrichmentEngine
+from core.engine import EnrichmentEngine
 from sources.tech_stack import TechStackDetector
-from exporter import export_to_excel, export_to_csv, export_to_vcard
+from core.exporter import export_to_excel, export_to_csv, export_to_vcard
 
 console = Console()
 

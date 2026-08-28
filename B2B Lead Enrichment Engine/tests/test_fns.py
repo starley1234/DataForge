@@ -1,5 +1,5 @@
 import pytest
-from fns_source import parse_management_string, FNSEgrulClient
+from core.fns_source import parse_management_string, FNSEgrulClient
 
 
 def test_parse_management_string():

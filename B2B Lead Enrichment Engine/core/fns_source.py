@@ -5,8 +5,8 @@ import logging
 from typing import Optional, List, Dict, Any, Tuple
 import requests
 from pypdf import PdfReader
-from models import Company, DecisionMaker
-from validator import validate_email_syntax
+from core.models import Company, DecisionMaker
+from core.validator import validate_email_syntax
 
 logger = logging.getLogger("fns_egrul")
 

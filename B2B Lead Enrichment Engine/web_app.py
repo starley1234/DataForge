@@ -10,17 +10,17 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, PlainTex
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from engine import EnrichmentEngine
-from email_generator import generate_email_permutations
-from validator import verify_email_full, normalize_phone
-from deliverability import analyze_domain_deliverability
-from exporter import (
+from core.engine import EnrichmentEngine
+from core.email_generator import generate_email_permutations
+from core.validator import verify_email_full, normalize_phone
+from core.deliverability import analyze_domain_deliverability
+from core.exporter import (
     export_to_csv, export_to_excel, export_to_amocrm_csv,
     export_to_bitrix24_csv, export_to_hubspot_csv, export_to_vcard,
     export_to_json, generate_outreach_email, generate_cold_calling_script
 )
-from batch_processor import BatchProcessor
-from config import settings
+from core.batch_processor import BatchProcessor
+from core.config import settings
 
 app = FastAPI(
     title=settings.APP_TITLE,
@@ -223,7 +223,7 @@ def get_lead_detail(lead_id: int):
 @app.post("/api/leads/manual")
 def create_manual_lead(req: ManualLeadCreateRequest):
     """Ручное создание организации и контакта ЛПР с автоматическим скорингом."""
-    from models import Company, DecisionMaker
+    from core.models import Company, DecisionMaker
     
     dm = DecisionMaker(
         company_inn=req.inn.strip(),

@@ -2,16 +2,16 @@ import logging
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from models import Company, DecisionMaker
-from engine import EnrichmentEngine
+from core.models import Company, DecisionMaker
+from core.engine import EnrichmentEngine
 from sources.headhunter import HeadHunterClient
 from sources.msp_registry import MSPRegistryClient
 from sources.tech_stack import TechStackDetector
 from sources.financial_scoring import FinancialScoringEngine
 from sources.fns_egrul import FNSEgrulClient
 from sources.company_registry import CompanyRegistry
-from email_generator import clean_domain
-from config import settings
+from core.email_generator import clean_domain
+from core.config import settings
 
 logger = logging.getLogger("b2b_harvester")
 

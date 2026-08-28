@@ -1,6 +1,6 @@
 import os
 import pytest
-from exporter import (
+from core.exporter import (
     export_to_csv,
     export_to_excel,
     export_to_amocrm_csv,

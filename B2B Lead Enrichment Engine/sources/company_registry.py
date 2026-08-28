@@ -1,9 +1,9 @@
 import os
 from typing import List, Dict, Any, Optional
 import httpx
-from models import Company, DecisionMaker
-from validator import normalize_phone
-from config import settings
+from core.models import Company, DecisionMaker
+from core.validator import normalize_phone
+from core.config import settings
 
 
 class DaDataClient:

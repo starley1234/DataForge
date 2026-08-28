@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rich.console import Console
 from rich.panel import Panel
-from engine import EnrichmentEngine
-from exporter import generate_outreach_email, generate_cold_calling_script, export_to_vcard
+from core.engine import EnrichmentEngine
+from core.exporter import generate_outreach_email, generate_cold_calling_script, export_to_vcard
 
 console = Console()
 

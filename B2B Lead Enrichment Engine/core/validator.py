@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, Tuple, List
 import dns.resolver
 import phonenumbers
 from phonenumbers import geocoder, carrier
-from config import settings
+from core.config import settings
 
 EMAIL_REGEX = re.compile(
     r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
@@ -95,6 +95,16 @@ REGION_TIMEZONES = {
 # Потокобезопасный LRU-кэш для DNS MX записей
 _dns_cache_lock = threading.Lock()
 _DNS_MX_CACHE: Dict[str, Tuple[bool, Optional[str], float]] = {}
+
+
+def is_disposable_email(email_or_domain: str) -> bool:
+    dom = email_or_domain.split("@")[-1].lower().strip() if "@" in email_or_domain else email_or_domain.lower().strip()
+    return dom in DISPOSABLE_DOMAINS
+
+
+def is_free_email(email_or_domain: str) -> bool:
+    dom = email_or_domain.split("@")[-1].lower().strip() if "@" in email_or_domain else email_or_domain.lower().strip()
+    return dom in FREE_EMAIL_DOMAINS
 
 
 def is_role_based_email(email: str) -> bool:
@@ -306,24 +316,25 @@ def check_domain_mx(domain: str, use_cache: bool = True) -> Tuple[bool, Optional
 
 def check_catch_all_domain(domain: str, best_mx: str, timeout: float = 3.0) -> bool:
     """
-    Проверяет, настроен ли на домене Catch-All (прием любой входящей почты на несуществующий ящик).
-    Позволяет избежать ложноположительной уверенности в сгенерированных email.
+    Проверка, принимает ли почтовый сервер любые письма на несуществующие адреса (Catch-All).
     """
-    if not best_mx or not settings.CHECK_CATCH_ALL:
+    if not best_mx:
         return False
-
-    random_test_email = f"catchall_test_{int(time.time())}_{abs(hash(domain)) % 99999}@{domain}"
+    fake_local = "non_existent_check_" + uuid.uuid4().hex[:10]
+    fake_email = f"{fake_local}@{domain}"
     try:
-        server = smtplib.SMTP(timeout=timeout)
-        server.connect(best_mx, 25)
-        server.helo('mail.leadengine.pro')
-        server.mail('verify@leadengine.pro')
-        code, _ = server.rcpt(random_test_email)
-        server.quit()
-        # Если сервер ответил 250 OK на заведомо случайный ящик -> Catch-All активен
-        return code == 250
+        with smtplib.SMTP(best_mx, 25, timeout=timeout) as smtp:
+            smtp.helo("mail.lead-enrichment.local")
+            smtp.mail("probe@lead-enrichment.local")
+            code, _ = smtp.rcpt(fake_email)
+            return code in (250, 251)
     except Exception:
         return False
+
+
+# Псевдонимы функций
+get_timezone_offset_by_phone = detect_timezone_offset
+is_calling_time_allowed = is_calling_window_open
 
 
 def verify_email_full(
