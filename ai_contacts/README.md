@@ -31,7 +31,7 @@
 
 2. **Запуск веб-интерфейса (UI):**
    ```bash
-   python3 src/app.py
+   python src/app.py
    ```
    После запуска веб-интерфейс доступен по адресу: `http://localhost:5000`
 
