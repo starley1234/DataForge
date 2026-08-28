@@ -98,6 +98,19 @@ class EnrichmentEngine:
         """Совместимость с API по ИНН."""
         return self.fetch_and_enrich(inn, scrape_web=scrape_web, verify_emails=verify_emails)
 
+    def enrich_all_known_companies(self, scrape_web: bool = False, verify_emails: bool = True) -> List[Company]:
+        """
+        Автоматическое обогащение всех организаций РФ и их руководящего состава.
+        Позволяет наполнить и актуализировать базу в 1 клик без необходимости знать ИНН.
+        """
+        all_comps = self.mock_registry.get_all()
+        enriched = []
+        for comp in all_comps:
+            res = self.enrich_company_and_dms(comp, scrape_web=scrape_web, verify_emails=verify_emails)
+            enriched.append(res)
+        return enriched
+
+
     def enrich_by_domain(self, raw_domain: str, verify_emails: bool = True) -> Optional[Company]:
         """
         Прямое обогащение организации по сайту / домену.

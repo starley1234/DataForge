@@ -140,6 +140,15 @@ def test_manual_lead_create_and_flow():
     assert resp_del.status_code == 200
 
 
+def test_auto_enrich_all_endpoint():
+    resp = client.post("/api/enrich/auto-all")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["companies_count"] > 0
+    assert data["leads_count"] > 0
+
+
 def test_export_endpoints():
     r_csv = client.get("/api/export/csv")
     assert r_csv.status_code == 200
