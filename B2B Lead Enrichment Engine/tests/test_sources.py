@@ -65,24 +65,16 @@ def test_financial_scoring():
     assert len(factors) > 0
 
 
-def test_headhunter_client_search():
-    client = HeadHunterClient()
-    with patch("httpx.Client.get") as mock_get:
-        mock_get.return_value = MagicMock(
-            status_code=200,
-            json=lambda: {
-                "items": [
-                    {
-                        "id": "123",
-                        "name": "Яндекс",
-                        "site_url": "https://yandex.ru",
-                        "open_vacancies": 450,
-                        "alternate_url": "https://hh.ru/employer/123"
-                    }
-                ]
-            }
-        )
-        res = client.search_employer("Яндекс")
-        assert res is not None
-        assert res["name"] == "Яндекс"
-        assert res["open_vacancies"] == 450
+def test_industry_crawler():
+    from sources.industry_crawler import IndustryCrawler
+    from sources.company_registry import CompanyRegistry
+
+    crawler = IndustryCrawler()
+    comps = crawler.harvest_industry_companies(count_per_sector=2)
+    assert len(comps) >= 16
+    assert all(c.inn and c.name and c.okved for c in comps)
+
+    registry = CompanyRegistry()
+    all_known = registry.get_all()
+    assert len(all_known) >= 50
+

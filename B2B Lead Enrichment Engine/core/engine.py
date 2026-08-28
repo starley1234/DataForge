@@ -12,6 +12,7 @@ from core.scraper import WebsiteScraper
 from core.domain_finder import DomainFinder
 from core.company_sources import DaDataClient, MockCompanyRegistry
 from core.fns_source import FNSEgrulClient
+from sources.industry_crawler import IndustryCrawler
 from core.config import settings
 
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s")
@@ -98,12 +99,17 @@ class EnrichmentEngine:
         """Совместимость с API по ИНН."""
         return self.fetch_and_enrich(inn, scrape_web=scrape_web, verify_emails=verify_emails)
 
-    def enrich_all_known_companies(self, scrape_web: bool = False, verify_emails: bool = True) -> List[Company]:
+    def enrich_all_known_companies(self, scrape_web: bool = False, verify_emails: bool = True, include_industries: bool = True) -> List[Company]:
         """
-        Автоматическое обогащение всех организаций РФ и их руководящего состава.
+        Автоматическое обогащение всех организаций РФ и их руководящего состава по всем отраслям.
         Позволяет наполнить и актуализировать базу в 1 клик без необходимости знать ИНН.
         """
-        all_comps = self.mock_registry.get_all()
+        all_comps = list(self.mock_registry.get_all())
+        if include_industries:
+            crawler = IndustryCrawler()
+            industry_comps = crawler.harvest_industry_companies(count_per_sector=6)
+            all_comps.extend(industry_comps)
+
         enriched = []
         for comp in all_comps:
             res = self.enrich_company_and_dms(comp, scrape_web=scrape_web, verify_emails=verify_emails)
