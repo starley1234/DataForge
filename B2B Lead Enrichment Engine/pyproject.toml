@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "b2b-lead-enrichment-engine"
+version = "2.1.0"
+description = "Enterprise B2B Lead Finder, Enrichment & Decision Maker Intelligence Platform for Russian Markets"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "B2B Lead Intelligence Team" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content"
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "pydantic>=2.6.0",
+    "sqlalchemy>=2.0.28",
+    "pandas>=2.2.0",
+    "openpyxl>=3.1.2",
+    "phonenumbers>=8.13.0",
+    "dnspython>=2.6.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "requests>=2.31.0",
+    "pypdf>=4.1.0",
+    "rich>=13.7.0",
+    "python-multipart>=0.0.9"
+]
+
+[project.scripts]
+b2b-engine = "cli:main"
