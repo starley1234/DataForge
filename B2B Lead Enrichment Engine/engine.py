@@ -2,7 +2,7 @@ import logging
 from typing import List, Optional, Dict, Any, Tuple
 from urllib.parse import urlparse
 from datetime import datetime
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 
 from models import init_db, CompanyORM, DecisionMakerORM, Company, DecisionMaker
 from translit import split_russian_name
@@ -16,6 +16,36 @@ from config import settings
 
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("b2b_engine")
+
+
+def calculate_company_solvency_score(comp: Company) -> Tuple[int, str]:
+    """
+    Рассчитывает индекс надежности и финансовой стабильности компании (0 - 100) и категорию риска.
+    """
+    score = 60
+    if comp.status == "ACTIVE":
+        score += 15
+    elif comp.status in ("LIQUIDATING", "BANKRUPT"):
+        score -= 45
+
+    if comp.revenue_rub and comp.revenue_rub > 1_000_000_000:
+        score += 15
+    elif comp.revenue_rub and comp.revenue_rub > 50_000_000:
+        score += 10
+
+    if comp.employees_count and comp.employees_count > 50:
+        score += 10
+    elif comp.employees_count and comp.employees_count > 10:
+        score += 5
+
+    if comp.website or comp.domain:
+        score += 5
+    if comp.general_email:
+        score += 5
+
+    final_score = min(100, max(10, score))
+    risk = "LOW" if final_score >= 70 else ("MEDIUM" if final_score >= 45 else "HIGH")
+    return final_score, risk
 
 
 class EnrichmentEngine:
@@ -42,6 +72,8 @@ class EnrichmentEngine:
         3. При отсутствии ищет в эталонной базе.
         4. Запускает обогащение контактами и краулинг.
         """
+        if not query:
+            return None
         clean_q = query.strip()
         logger.info(f"Запрос на поиск компании: '{clean_q}'")
 
@@ -63,7 +95,7 @@ class EnrichmentEngine:
         return self.enrich_company_and_dms(comp, scrape_web=scrape_web, verify_emails=verify_emails)
 
     def fetch_and_enrich_by_inn(self, inn: str, scrape_web: bool = True, verify_emails: bool = True) -> Optional[Company]:
-        """Совместимость со старым API по ИНН."""
+        """Совместимость с API по ИНН."""
         return self.fetch_and_enrich(inn, scrape_web=scrape_web, verify_emails=verify_emails)
 
     def enrich_by_domain(self, raw_domain: str, verify_emails: bool = True) -> Optional[Company]:
@@ -122,20 +154,19 @@ class EnrichmentEngine:
         2. Краулинг сайта (телефоны, почты, страницы команды, соцсети, реквизиты).
         3. Обучение паттерну email (Pattern Learning).
         4. Генерация корпоративных адресов для всех найденных ЛПР.
-        5. Валидация контактов (DNS MX + Phone E.164 + Ролевые фильтры).
-        6. Расчет скоринга доверия.
+        5. Валидация контактов (DNS MX + Phone E.164 + Ролевые фильтры + Timezone).
+        6. Расчет скоринга доверия и финансовой устойчивости компании.
         7. Сохранение в базу данных с дедупликацией.
         """
         logger.info(f"Обогащение данных: {company.name} (ИНН: {company.inn})")
 
-        # 1. Поиск домена, если он не указан
+        # 1. Поиск домена
         domain = company.domain
         if not domain and company.website:
             domain = clean_domain(company.website)
             company.domain = domain
 
         if not domain:
-            # Интеллектуальный поиск домена через DomainFinder
             found_domain = self.domain_finder.find_domain(company.name, city=company.city or company.region, inn=company.inn)
             if found_domain:
                 domain = found_domain
@@ -143,9 +174,8 @@ class EnrichmentEngine:
                 company.website = domain
                 logger.info(f"Найден корпоративный домен: {domain}")
 
-        # 2. Краулинг веб-ресурса компании
+        # 2. Краулинг сайта
         known_email_pattern = None
-        scraped_data = None
         if scrape_web and domain:
             try:
                 logger.info(f"Сбор контактных данных с сайта: {domain}")
@@ -163,7 +193,9 @@ class EnrichmentEngine:
                 if not company.vk and scraped_data.get("socials", {}).get("vk"):
                     company.vk = scraped_data["socials"]["vk"][0]
 
-                # Добавляем новых руководителей, обнаруженных на страницах сайта
+                if not company.tenchat and scraped_data.get("socials", {}).get("tenchat"):
+                    company.tenchat = scraped_data["socials"]["tenchat"][0]
+
                 existing_names = {dm.full_name.lower().strip() for dm in company.decision_makers}
                 for p in scraped_data.get("persons", []):
                     clean_pname = p["full_name"].strip()
@@ -180,26 +212,27 @@ class EnrichmentEngine:
                         ))
                         existing_names.add(clean_pname.lower())
 
-                # 3. Детекция корпоративного шаблона email компании
-                # Если на сайте есть email сотрудника и его имя, определяем шаблон
                 for dm in company.decision_makers:
                     if dm.email:
                         pat = detect_pattern_from_sample(dm.email, dm.full_name, domain)
                         if pat:
                             known_email_pattern = pat
-                            logger.info(f"Определен корпоративный шаблон email: {pat}")
                             break
             except Exception as e:
                 logger.warning(f"Ошибка при краулинге сайта {domain}: {e}")
 
-        # 4. Генерация и валидация контактов для каждого ЛПР
+        # 3. Финансовый скоринг компании
+        s_score, r_level = calculate_company_solvency_score(company)
+        company.solvency_score = s_score
+        company.risk_level = r_level
+
+        # 4. Обработка каждого ЛПР
         for dm in company.decision_makers:
             last, first, middle = split_russian_name(dm.full_name)
             dm.last_name = last
             dm.first_name = first
             dm.middle_name = middle
 
-            # Если email не задан, генерируем по вероятностным шаблонам
             if not dm.email and domain:
                 perms = generate_email_permutations(dm.full_name, domain, known_pattern=known_email_pattern)
                 if perms:
@@ -209,7 +242,6 @@ class EnrichmentEngine:
                     dm.email_status = "generated"
                     dm.confidence_score = best_cand["confidence"]
 
-            # Валидация email через DNS MX и синтаксис
             if dm.email and verify_emails:
                 v_res = verify_email_full(dm.email)
                 dm.email_status = v_res["status"]
@@ -218,18 +250,18 @@ class EnrichmentEngine:
                 else:
                     dm.confidence_score = min(98, max(dm.confidence_score, v_res["confidence"]))
 
-            # Если телефон ЛПР отсутствует, подставляем общий телефон компании
             if not dm.phone and company.general_phone:
                 dm.phone = company.general_phone
                 dm.phone_type = "reception"
 
-            # Валидация и нормализация телефона
             if dm.phone:
                 p_res = normalize_phone(dm.phone)
                 if p_res["valid"]:
                     dm.phone = p_res["formatted"]
-                    if not dm.phone_type or dm.phone_type == "other":
-                        dm.phone_type = p_res["type"]
+                    dm.phone_type = p_res["type"]
+                    dm.phone_carrier = p_res["carrier"]
+                    dm.phone_region = p_res["region"]
+                    dm.phone_timezone = p_res["timezone"]
 
         # 5. Сохранение в БД
         self.save_company_to_db(company)
@@ -253,6 +285,8 @@ class EnrichmentEngine:
                     okved_name=comp.okved_name,
                     revenue_rub=comp.revenue_rub,
                     employees_count=comp.employees_count,
+                    solvency_score=comp.solvency_score or 75,
+                    risk_level=comp.risk_level or "LOW",
                     website=comp.website,
                     domain=comp.domain,
                     region=comp.region,
@@ -262,6 +296,7 @@ class EnrichmentEngine:
                     general_phone=comp.general_phone,
                     telegram=comp.telegram,
                     vk=comp.vk,
+                    tenchat=comp.tenchat,
                     source=comp.source or "egrul",
                     tags=comp.tags,
                     notes=comp.notes,
@@ -287,8 +322,14 @@ class EnrichmentEngine:
                     db_comp.telegram = comp.telegram
                 if comp.vk:
                     db_comp.vk = comp.vk
+                if comp.tenchat:
+                    db_comp.tenchat = comp.tenchat
                 if comp.tags:
                     db_comp.tags = comp.tags
+                if comp.solvency_score:
+                    db_comp.solvency_score = comp.solvency_score
+                if comp.risk_level:
+                    db_comp.risk_level = comp.risk_level
                 db_comp.updated_at = now
 
             for dm in comp.decision_makers:
@@ -312,7 +353,12 @@ class EnrichmentEngine:
                         email_pattern=dm.email_pattern,
                         phone=dm.phone,
                         phone_type=dm.phone_type,
+                        phone_carrier=dm.phone_carrier,
+                        phone_region=dm.phone_region,
+                        phone_timezone=dm.phone_timezone,
                         telegram=dm.telegram,
+                        vk=dm.vk,
+                        tenchat=dm.tenchat,
                         profile_url=dm.profile_url,
                         source=dm.source,
                         confidence_score=dm.confidence_score,
@@ -329,6 +375,10 @@ class EnrichmentEngine:
                     if dm.phone:
                         db_dm.phone = dm.phone
                         db_dm.phone_type = dm.phone_type
+                    if dm.phone_carrier:
+                        db_dm.phone_carrier = dm.phone_carrier
+                    if dm.phone_timezone:
+                        db_dm.phone_timezone = dm.phone_timezone
                     if dm.title:
                         db_dm.title = dm.title
                     db_dm.confidence_score = dm.confidence_score
@@ -362,12 +412,15 @@ class EnrichmentEngine:
             if query:
                 clean_q = f"%{query.strip()}%"
                 q = q.filter(
-                    (DecisionMakerORM.full_name.ilike(clean_q)) |
-                    (CompanyORM.name.ilike(clean_q)) |
-                    (CompanyORM.inn.ilike(clean_q)) |
-                    (DecisionMakerORM.email.ilike(clean_q)) |
-                    (DecisionMakerORM.phone.ilike(clean_q)) |
-                    (DecisionMakerORM.title.ilike(clean_q))
+                    or_(
+                        DecisionMakerORM.full_name.ilike(clean_q),
+                        CompanyORM.name.ilike(clean_q),
+                        CompanyORM.inn.ilike(clean_q),
+                        DecisionMakerORM.email.ilike(clean_q),
+                        DecisionMakerORM.phone.ilike(clean_q),
+                        DecisionMakerORM.title.ilike(clean_q),
+                        CompanyORM.tags.ilike(clean_q)
+                    )
                 )
 
             if region:
@@ -400,6 +453,9 @@ class EnrichmentEngine:
                     "okved": c.okved,
                     "okved_name": c.okved_name,
                     "revenue_rub": c.revenue_rub,
+                    "employees_count": c.employees_count,
+                    "solvency_score": c.solvency_score,
+                    "risk_level": c.risk_level,
                     "website": c.website or c.domain,
                     "domain": c.domain,
                     "region": c.region or c.city,
@@ -419,7 +475,12 @@ class EnrichmentEngine:
                     "email_pattern": dm.email_pattern,
                     "dm_phone": dm.phone,
                     "dm_phone_type": dm.phone_type,
+                    "phone_carrier": dm.phone_carrier,
+                    "phone_region": dm.phone_region,
+                    "phone_timezone": dm.phone_timezone,
                     "dm_telegram": dm.telegram,
+                    "dm_vk": dm.vk,
+                    "dm_tenchat": dm.tenchat,
                     "dm_profile_url": dm.profile_url,
                     "source": dm.source,
                     "confidence_score": dm.confidence_score,
@@ -449,13 +510,21 @@ class EnrichmentEngine:
                 "okved": c.okved,
                 "okved_name": c.okved_name,
                 "revenue_rub": c.revenue_rub,
+                "employees_count": c.employees_count,
+                "solvency_score": c.solvency_score,
+                "risk_level": c.risk_level,
                 "website": c.website or c.domain,
                 "domain": c.domain,
                 "region": c.region or c.city,
                 "address": c.address,
                 "general_phone": c.general_phone,
                 "general_email": c.general_email,
+                "telegram_company": c.telegram,
+                "vk_company": c.vk,
                 "dm_full_name": dm.full_name,
+                "dm_first_name": dm.first_name,
+                "dm_last_name": dm.last_name,
+                "dm_middle_name": dm.middle_name,
                 "dm_title": dm.title,
                 "dm_role_level": dm.role_level,
                 "dm_email": dm.email,
@@ -463,7 +532,12 @@ class EnrichmentEngine:
                 "email_pattern": dm.email_pattern,
                 "dm_phone": dm.phone,
                 "dm_phone_type": dm.phone_type,
+                "phone_carrier": dm.phone_carrier,
+                "phone_region": dm.phone_region,
+                "phone_timezone": dm.phone_timezone,
                 "dm_telegram": dm.telegram,
+                "dm_vk": dm.vk,
+                "dm_tenchat": dm.tenchat,
                 "dm_profile_url": dm.profile_url,
                 "source": dm.source,
                 "confidence_score": dm.confidence_score,
@@ -475,7 +549,7 @@ class EnrichmentEngine:
             session.close()
 
     def update_lead(self, lead_id: int, updates: Dict[str, Any]) -> bool:
-        """Обновляет поля контакта ЛПР (статус в CRM, телефон, email, заметки)."""
+        """Обновляет поля контакта ЛПР."""
         session = self.SessionFactory()
         try:
             dm = session.query(DecisionMakerORM).filter_by(id=lead_id).first()
@@ -513,6 +587,43 @@ class EnrichmentEngine:
         finally:
             session.close()
 
+    def bulk_update_lead_status(self, lead_ids: List[int], new_status: str) -> int:
+        """Массовое обновление статуса в CRM для выбранных лидов."""
+        session = self.SessionFactory()
+        updated = 0
+        try:
+            for lid in lead_ids:
+                dm = session.query(DecisionMakerORM).filter_by(id=lid).first()
+                if dm:
+                    dm.lead_status = new_status
+                    dm.updated_at = datetime.utcnow()
+                    updated += 1
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Ошибка массового обновления статуса: {e}")
+        finally:
+            session.close()
+        return updated
+
+    def bulk_delete_leads(self, lead_ids: List[int]) -> int:
+        """Массовое удаление лидов."""
+        session = self.SessionFactory()
+        deleted = 0
+        try:
+            for lid in lead_ids:
+                dm = session.query(DecisionMakerORM).filter_by(id=lid).first()
+                if dm:
+                    session.delete(dm)
+                    deleted += 1
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Ошибка массового удаления: {e}")
+        finally:
+            session.close()
+        return deleted
+
     def reverify_all_emails(self) -> int:
         """Пакетная повторная валидация всех почтовых ящиков в базе."""
         session = self.SessionFactory()
@@ -543,7 +654,6 @@ class EnrichmentEngine:
             total_companies = session.query(func.count(CompanyORM.id)).scalar() or 0
             total_dms = session.query(func.count(DecisionMakerORM.id)).scalar() or 0
 
-            # Статусы email
             valid_mx_count = session.query(func.count(DecisionMakerORM.id)).filter(
                 DecisionMakerORM.email_status.in_(["valid_mx", "verified"])
             ).scalar() or 0
@@ -552,7 +662,6 @@ class EnrichmentEngine:
                 DecisionMakerORM.email_status == "generated"
             ).scalar() or 0
 
-            # Типы телефонов
             mobile_phones = session.query(func.count(DecisionMakerORM.id)).filter(
                 DecisionMakerORM.phone_type == "mobile"
             ).scalar() or 0
@@ -561,21 +670,23 @@ class EnrichmentEngine:
                 DecisionMakerORM.phone_type.in_(["office", "reception", "8800"])
             ).scalar() or 0
 
-            # Распределение по уровням ЛПР
             role_stats = session.query(
                 DecisionMakerORM.role_level, func.count(DecisionMakerORM.id)
             ).group_by(DecisionMakerORM.role_level).all()
 
             roles_dict = {r[0] or "Другое": r[1] for r in role_stats}
 
-            # Топ регионов
+            crm_stats = session.query(
+                DecisionMakerORM.lead_status, func.count(DecisionMakerORM.id)
+            ).group_by(DecisionMakerORM.lead_status).all()
+            crm_funnel = {s[0] or "NEW": s[1] for s in crm_stats}
+
             region_stats = session.query(
                 CompanyORM.region, func.count(CompanyORM.id)
             ).filter(CompanyORM.region.isnot(None)).group_by(CompanyORM.region).order_by(desc(func.count(CompanyORM.id))).limit(6).all()
 
             regions_list = [{"region": r[0], "count": r[1]} for r in region_stats if r[0]]
 
-            # Топ отраслей
             okved_stats = session.query(
                 CompanyORM.okved_name, func.count(CompanyORM.id)
             ).filter(CompanyORM.okved_name.isnot(None)).group_by(CompanyORM.okved_name).order_by(desc(func.count(CompanyORM.id))).limit(5).all()
@@ -590,6 +701,7 @@ class EnrichmentEngine:
                 "mobile_phones_count": mobile_phones,
                 "office_phones_count": office_phones,
                 "roles_breakdown": roles_dict,
+                "crm_funnel": crm_funnel,
                 "top_regions": regions_list,
                 "top_industries": okved_list
             }

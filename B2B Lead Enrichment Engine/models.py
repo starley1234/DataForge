@@ -3,7 +3,7 @@ import re
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import Column, Integer, String, BigInteger, DateTime, ForeignKey, Text, create_engine
+from sqlalchemy import Column, Integer, Float, String, BigInteger, DateTime, ForeignKey, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
 
 Base = declarative_base()
@@ -22,6 +22,8 @@ class CompanyORM(Base):
     okved_name = Column(String(255), nullable=True)
     revenue_rub = Column(BigInteger, nullable=True)
     employees_count = Column(Integer, nullable=True)
+    solvency_score = Column(Integer, default=75)  # 0 - 100
+    risk_level = Column(String(20), default="LOW")  # LOW, MEDIUM, HIGH
     website = Column(String(255), nullable=True)
     domain = Column(String(255), nullable=True, index=True)
     region = Column(String(100), nullable=True, index=True)
@@ -31,6 +33,7 @@ class CompanyORM(Base):
     general_phone = Column(String(50), nullable=True)
     telegram = Column(String(255), nullable=True)
     vk = Column(String(255), nullable=True)
+    tenchat = Column(String(255), nullable=True)
     source = Column(String(100), default="egrul")
     tags = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
@@ -59,15 +62,20 @@ class DecisionMakerORM(Base):
     title = Column(String(255), nullable=True)
     role_level = Column(String(50), nullable=True, default="C-Level")  # C-Level, Director, Head, Founder, Manager
     email = Column(String(255), nullable=True, index=True)
-    email_status = Column(String(50), default="unverified")  # verified, valid_mx, generated, invalid, catch_all
+    email_status = Column(String(50), default="unverified")  # verified, valid_mx, generated, catch_all, invalid
     email_pattern = Column(String(50), nullable=True)  # {f}.{last}, {last}.{f}, etc.
     phone = Column(String(50), nullable=True)
     phone_type = Column(String(50), nullable=True)  # mobile, office, 8800, reception
+    phone_carrier = Column(String(100), nullable=True)
+    phone_region = Column(String(100), nullable=True)
+    phone_timezone = Column(String(50), nullable=True)
     telegram = Column(String(100), nullable=True)
+    vk = Column(String(100), nullable=True)
+    tenchat = Column(String(100), nullable=True)
     profile_url = Column(String(500), nullable=True)
     source = Column(String(100), nullable=True)  # egrul, website, tenchat, linkedin, pattern
     confidence_score = Column(Integer, default=50)  # 0 - 100
-    lead_status = Column(String(50), default="NEW")  # NEW, CONTACTED, QUALIFIED, CONVERTED, REJECTED
+    lead_status = Column(String(50), default="NEW")  # NEW, CONTACTED, IN_PROGRESS, QUALIFIED, MEETING_SCHEDULED, WON, REJECTED
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -85,12 +93,14 @@ class BatchTaskORM(Base):
     processed_items = Column(Integer, default=0)
     success_items = Column(Integer, default=0)
     failed_items = Column(Integer, default=0)
+    progress_percent = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
     error_log = Column(Text, nullable=True)
+    results_summary = Column(Text, nullable=True)
 
 
-# Pydantic Schemas for validation and API exchange
+# Pydantic Schemas for API exchange
 class DecisionMaker(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -110,7 +120,12 @@ class DecisionMaker(BaseModel):
     email_pattern: Optional[str] = None
     phone: Optional[str] = None
     phone_type: Optional[str] = None
+    phone_carrier: Optional[str] = None
+    phone_region: Optional[str] = None
+    phone_timezone: Optional[str] = None
     telegram: Optional[str] = None
+    vk: Optional[str] = None
+    tenchat: Optional[str] = None
     profile_url: Optional[str] = None
     source: Optional[str] = "egrul"
     confidence_score: int = 50
@@ -147,6 +162,8 @@ class Company(BaseModel):
     okved_name: Optional[str] = None
     revenue_rub: Optional[int] = None
     employees_count: Optional[int] = None
+    solvency_score: Optional[int] = 75
+    risk_level: Optional[str] = "LOW"
     website: Optional[str] = None
     domain: Optional[str] = None
     region: Optional[str] = None
@@ -156,6 +173,7 @@ class Company(BaseModel):
     general_phone: Optional[str] = None
     telegram: Optional[str] = None
     vk: Optional[str] = None
+    tenchat: Optional[str] = None
     source: Optional[str] = "egrul"
     tags: Optional[str] = None
     notes: Optional[str] = None
@@ -204,7 +222,7 @@ class BatchCreateRequest(BaseModel):
 
 
 class EnrichmentRequest(BaseModel):
-    query: str  # INN, OGRN or Company Name
+    query: str
     scrape_web: bool = True
     verify_emails: bool = True
 
@@ -227,14 +245,17 @@ class PermutationRequest(BaseModel):
 
 class OutreachTemplateRequest(BaseModel):
     lead_id: int
-    offer_type: str = "partnership"  # partnership, sales, demo, service
+    offer_type: str = "partnership"  # partnership, sales, demo, service, procurement, substitution, event, followup1, followup2
+    sender_name: Optional[str] = "[Ваше Имя]"
+    sender_company: Optional[str] = "[Ваша Компания]"
+    sender_title: Optional[str] = "[Ваша Должность]"
+    sender_phone: Optional[str] = "[Ваш Телефон]"
 
 
 def _migrate_db(engine):
     """Автоматическая миграция недостающих колонок для существующих баз данных."""
     from sqlalchemy import text
     with engine.connect() as conn:
-        # Проверяем тип базы данных
         is_sqlite = engine.dialect.name == "sqlite"
         if is_sqlite:
             # Колонки для companies
@@ -243,6 +264,9 @@ def _migrate_db(engine):
             comp_additions = [
                 ("telegram", "VARCHAR(255)"),
                 ("vk", "VARCHAR(255)"),
+                ("tenchat", "VARCHAR(255)"),
+                ("solvency_score", "INTEGER DEFAULT 75"),
+                ("risk_level", "VARCHAR(20) DEFAULT 'LOW'"),
                 ("source", "VARCHAR(100) DEFAULT 'egrul'"),
                 ("tags", "VARCHAR(255)"),
                 ("notes", "TEXT"),
@@ -258,6 +282,11 @@ def _migrate_db(engine):
             dm_additions = [
                 ("gender", "VARCHAR(20)"),
                 ("email_pattern", "VARCHAR(50)"),
+                ("phone_carrier", "VARCHAR(100)"),
+                ("phone_region", "VARCHAR(100)"),
+                ("phone_timezone", "VARCHAR(50)"),
+                ("vk", "VARCHAR(100)"),
+                ("tenchat", "VARCHAR(100)"),
                 ("lead_status", "VARCHAR(50) DEFAULT 'NEW'"),
                 ("notes", "TEXT"),
                 ("updated_at", "DATETIME")
@@ -266,6 +295,17 @@ def _migrate_db(engine):
                 if col_name not in existing_dm_cols:
                     conn.execute(text(f"ALTER TABLE decision_makers ADD COLUMN {col_name} {col_type}"))
             
+            # Колонки для batch_tasks
+            res = conn.execute(text("PRAGMA table_info(batch_tasks)")).fetchall()
+            existing_task_cols = {row[1] for row in res}
+            task_additions = [
+                ("progress_percent", "FLOAT DEFAULT 0.0"),
+                ("results_summary", "TEXT")
+            ]
+            for col_name, col_type in task_additions:
+                if col_name not in existing_task_cols:
+                    conn.execute(text(f"ALTER TABLE batch_tasks ADD COLUMN {col_name} {col_type}"))
+
             conn.commit()
 
 

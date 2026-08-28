@@ -22,7 +22,13 @@ def test_transliterate_complex_chars():
     assert "yu" in transliterate("Юдин")
 
 
-def test_transliterate_variants():
+def test_transliterate_variants_and_aliases():
+    vars_alex = transliterate_variants("Александр")
+    assert "alex" in vars_alex or "alexander" in vars_alex
+
+    vars_dmitry = transliterate_variants("Дмитрий")
+    assert "dmitry" in vars_dmitry or "dima" in vars_dmitry
+
     vars_yulia = transliterate_variants("Юлия")
     assert len(vars_yulia) >= 1
     assert any("yuli" in v or "iuli" in v for v in vars_yulia)
@@ -48,30 +54,29 @@ def test_split_russian_name_two_parts_first_last():
     assert first == "Иван"
 
 
-def test_split_russian_name_female():
-    last, first, middle = split_russian_name("Смирнова Анна Сергеевна")
-    assert last == "Смирнова"
-    assert first == "Анна"
-    assert middle == "Сергеевна"
-
-
-def test_split_russian_name_hyphenated():
-    last, first, middle = split_russian_name("Мамин-Сибиряк Дмитрий Наркисович")
-    assert "Мамин" in last
+def test_split_russian_name_compound_and_honorifics():
+    last, first, middle = split_russian_name("Генеральный директор Мамин-Сибиряк Дмитрий Наркисович")
+    assert "Мамин-сибиряк" in last or "Мамин-Сибиряк" in last
     assert first == "Дмитрий"
     assert middle == "Наркисович"
 
 
 def test_detect_gender():
     assert detect_gender("Иванов", "Иван", "Иванович") == "male"
-    assert detect_gender("Иванова", "Анна", "Сергеевна") == "female"
-    assert detect_gender("", "Ольга", "") == "female"
-    assert detect_gender("", "Михаил", "") == "male"
+    assert detect_gender("Петрова", "Анна", "Сергеевна") == "female"
+    assert detect_gender("", "Екатерина", "") == "female"
+    assert detect_gender("", "Алексей", "") == "male"
 
 
-def test_get_salutation():
-    assert "Иван Иванович" in get_salutation("Иванов Иван Иванович", formal=True)
-    assert "Анна Сергеевна" in get_salutation("Иванова Анна Сергеевна", formal=True)
-    assert "Уважаемая" in get_salutation("Иванова Анна Сергеевна", formal=True)
-    assert "Уважаемый" in get_salutation("Иванов Иван Иванович", formal=True)
-    assert get_salutation("Иван", formal=False) == "Здравствуйте, Иван!"
+def test_salutation_styles():
+    formal = get_salutation("Иванов Иван Иванович", formal=True, style="business")
+    assert formal == "Уважаемый Иван Иванович!"
+
+    female_formal = get_salutation("Иванова Анна Сергеевна", formal=True, style="business")
+    assert female_formal == "Уважаемая Анна Сергеевна!"
+
+    direct = get_salutation("Иванов Иван Иванович", style="direct")
+    assert direct == "Добрый день, Иван!"
+
+    executive = get_salutation("Иванов Иван Иванович", style="executive")
+    assert executive == "Иван Иванович, добрый день!"

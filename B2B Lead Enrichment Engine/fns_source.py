@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any, Tuple
 import requests
 from pypdf import PdfReader
 from models import Company, DecisionMaker
-from validator import normalize_phone, validate_email_syntax
+from validator import validate_email_syntax
 
 logger = logging.getLogger("fns_egrul")
 
@@ -26,23 +26,17 @@ def parse_management_string(g_str: str) -> Tuple[Optional[str], Optional[str]]:
         name = parts[1].strip()
         return name, post
 
-    # Если без двоеточия
     return cleaned, "Генеральный директор"
 
 
 class FNSEgrulClient:
     """
-    Официальный сборщик данных напрямую из Единого государственного реестра юридических лиц (ЕГРЮЛ ФНС РФ).
-    Не требует платных API-ключей.
-    
-    Извлекает:
-    - Официальное полное и краткое наименование
-    - ОГРН, ИНН, КПП
-    - Юридический адрес и регион
-    - ФИО первого лица (Генеральный директор, Президент, Руководитель) из JSON и PDF
-    - Должность руководителя
-    - Официальный Email организации, указанный при регистрации в ФНС
-    - Основной ОКВЭД
+    Официальный клиент прямого сбора сведений из ЕГРЮЛ / ЕГРИП ФНС РФ (https://egrul.nalog.ru/).
+    Поддерживает:
+    - Поиск по ИНН (10 знаков для ЮЛ, 12 знаков для ИП)
+    - Поиск по ОГРН / ОГРНИП
+    - Поиск по наименованию или ФИО предпринимателя
+    - Извлечение ФИО первого лица, должности, юридического адреса, выписки PDF, email и ОКВЭД.
     """
 
     BASE_URL = "https://egrul.nalog.ru/"
@@ -55,14 +49,14 @@ class FNSEgrulClient:
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "application/json, text/javascript, */*; q=0.01",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": "https://egrul.nalog.ru/index.html"
         })
 
     def search_by_query(self, query: str) -> List[Dict[str, Any]]:
-        """Поиск организаций в ЕГРЮЛ по ИНН, ОГРН или наименованию."""
+        """Поиск организаций и ИП в ЕГРЮЛ/ЕГРИП."""
         if not query:
             return []
         clean_query = query.strip()
@@ -75,7 +69,7 @@ class FNSEgrulClient:
             if not token:
                 return []
 
-            time.sleep(0.4)
+            time.sleep(0.35)
             r2 = self.session.get(f"{self.SEARCH_URL}{token}", timeout=self.timeout)
             if r2.status_code == 200:
                 data = r2.json()
@@ -86,25 +80,24 @@ class FNSEgrulClient:
 
     def fetch_company(self, query: str) -> Optional[Company]:
         """
-        Полное извлечение карточки компании и руководителя из ЕГРЮЛ.
-        `query` может быть ИНН, ОГРН или наименованием.
+        Полное извлечение карточки компании / ИП и руководителя из ЕГРЮЛ / ЕГРИП.
         """
         rows = self.search_by_query(query)
         if not rows:
             return None
 
-        # Ищем точное совпадение по ИНН / ОГРН, либо берем первую наиболее релевантную запись
+        # Ищем точное совпадение по ИНН / ОГРН, либо берем первую запись
         target_row = None
         q_clean = query.strip()
         for row in rows:
-            if row.get("i") == q_clean or row.get("o") == q_clean:
+            if row.get("i") == q_clean or row.get("o") == q_clean or row.get("p") == q_clean:
                 target_row = row
                 break
         if not target_row:
             target_row = rows[0]
 
         inn = target_row.get("i", "")
-        ogrn = target_row.get("o")
+        ogrn = target_row.get("o") or target_row.get("ogrn")
         kpp = target_row.get("p")
         comp_name = target_row.get("c") or target_row.get("n", "")
         full_name_org = target_row.get("n", "")
@@ -112,18 +105,24 @@ class FNSEgrulClient:
         address = target_row.get("a")
         token = target_row.get("t")
 
-        # 1. Быстрое извлечение руководителя из поля 'g' в JSON-ответе
+        # Проверка на ИП (12 знаков ИНН или ОГРНИП 15 знаков)
+        is_ip = len(inn) == 12 or (ogrn and len(ogrn) == 15)
+
         raw_mgmt = target_row.get("g")
         ceo_name, ceo_post = parse_management_string(raw_mgmt)
-        if not ceo_post:
+        if is_ip and not ceo_name:
+            ceo_name = full_name_org or comp_name
+            ceo_post = "Индивидуальный предприниматель"
+        elif not ceo_post:
             ceo_post = "Генеральный директор"
 
         official_email = None
         domain = None
         okved_code = None
         okved_name = None
+        reg_date = target_row.get("d") or target_row.get("r")
 
-        # 2. Скачивание и детальный парсинг выписки ЕГРЮЛ (PDF) для ОКВЭД и email
+        # Скачивание и детальный парсинг выписки ЕГРЮЛ (PDF)
         if token:
             try:
                 vyp_req = self.session.get(f"{self.VYP_REQ_URL}{token}", timeout=self.timeout)
@@ -131,7 +130,7 @@ class FNSEgrulClient:
                 if vyp_t:
                     ready = False
                     for _ in range(4):
-                        time.sleep(0.8)
+                        time.sleep(0.7)
                         st_resp = self.session.get(f"{self.VYP_STATUS_URL}{vyp_t}", timeout=self.timeout)
                         if st_resp.status_code == 200 and st_resp.json().get("status") == "ready":
                             ready = True
@@ -156,12 +155,12 @@ class FNSEgrulClient:
                                 if validate_email_syntax(cleaned):
                                     official_email = cleaned
                                     if "@" in official_email:
-                                        d_candidate = official_email.split("@")[1]
-                                        if not any(f in d_candidate for f in ["mail.ru", "yandex.ru", "gmail.com"]):
-                                            domain = d_candidate
+                                        d_cand = official_email.split("@")[1]
+                                        if not any(f in d_cand for f in ["mail.ru", "yandex.ru", "gmail.com"]):
+                                            domain = d_cand
 
-                            # Уточнение ФИО руководителя из PDF, если в JSON не было
-                            if not ceo_name:
+                            # Уточнение ФИО руководителя
+                            if not ceo_name or is_ip:
                                 fio_block = re.search(
                                     r"Фамилия\s*\n\s*Имя\s*\n\s*Отчество\s*\n\s*([А-ЯЁ\-]+)\s*\n\s*([А-ЯЁ\-]+)\s*\n\s*([А-ЯЁ\-]+)",
                                     full_text
@@ -169,18 +168,15 @@ class FNSEgrulClient:
                                 if fio_block:
                                     ceo_name = f"{fio_block.group(1).title()} {fio_block.group(2).title()} {fio_block.group(3).title()}"
 
-                            # Должность руководителя
                             post_block = re.search(r"Должность\s+([^\n]+)", full_text)
                             if post_block:
                                 ceo_post = post_block.group(1).strip().capitalize()
 
-                            # Адрес из PDF, если в JSON был краткий
                             if not address:
                                 addr_block = re.search(r"Адрес юридического лица\s+([^\n]+(?:\n[^\n]+){1,4})", full_text)
                                 if addr_block:
                                     address = ", ".join([line.strip() for line in addr_block.group(1).split("\n") if line.strip() and not line.startswith("ГРН")])
 
-                            # ОКВЭД
                             okv_match = re.search(
                                 r"(?:Код по ОКВЭД|Код и наименование вида деятельности)\s+([0-9\.]+)\s+([^\n]+)",
                                 full_text
@@ -189,7 +185,7 @@ class FNSEgrulClient:
                                 okved_code = okv_match.group(1).strip()
                                 okved_name = okv_match.group(2).strip()
             except Exception as e:
-                logger.debug(f"Парсинг PDF ЕГРЮЛ для {inn}: {e}")
+                logger.debug(f"Парсинг PDF ЕГРЮЛ: {e}")
 
         decision_makers = []
         if ceo_name:
@@ -198,7 +194,7 @@ class FNSEgrulClient:
                 company_name=comp_name,
                 full_name=ceo_name,
                 title=ceo_post,
-                role_level="C-Level",
+                role_level="Founder" if is_ip else "C-Level",
                 source="egrul_fns",
                 confidence_score=95
             ))

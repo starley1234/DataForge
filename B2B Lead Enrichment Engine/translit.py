@@ -1,7 +1,7 @@
 import re
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict, Set
 
-# Основная таблица транслитерации (ГОСТ 7.79-2000 / ICAO / B2B)
+# Основная таблица транслитерации (ГОСТ 7.79-2000 / B2B)
 TRANSLIT_PRIMARY = {
     'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
     'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
@@ -19,22 +19,110 @@ TRANSLIT_ALT = {
     'ъ': '', 'ы': 'i', 'ь': '', 'э': 'e', 'ю': 'iu', 'я': 'ia'
 }
 
-FEMALE_FIRST_NAMES = {
+# Англоязычные эквиваленты и уменьшительные формы для корпоративных email
+NAME_ALIASES: Dict[str, List[str]] = {
+    "александр": ["alex", "alexander", "sasha"],
+    "александра": ["alex", "alexandra", "sasha"],
+    "алексей": ["alex", "alexey", "alexei"],
+    "анатолий": ["anatoly", "anatoliy"],
+    "андрей": ["andrey", "andrei", "andrew"],
+    "антон": ["anton"],
+    "артем": ["artem", "artyom"],
+    "артём": ["artem", "artyom"],
+    "борис": ["boris", "bob"],
+    "вадим": ["vadim"],
+    "валентин": ["valentin"],
+    "валерий": ["valery", "valeriy"],
+    "василий": ["vasily", "vasiliy", "vasil"],
+    "виктор": ["viktor", "victor"],
+    "виталий": ["vitaly", "vitaliy"],
+    "владимир": ["vladimir", "vlad", "volodya"],
+    "владислав": ["vladislav", "vlad"],
+    "вячеслав": ["vyacheslav", "slava"],
+    "геннадий": ["gennady", "gennadiy", "gena"],
+    "георгий": ["georgy", "georgiy", "george"],
+    "григорий": ["grigory", "grigoriy", "grisha"],
+    "даниил": ["daniil", "danila", "daniel"],
+    "денис": ["denis", "den"],
+    "дмитрий": ["dmitry", "dmitriy", "dima"],
+    "евгений": ["evgeny", "evgeniy", "eugene", "zhenya"],
+    "евгения": ["evgeniya", "eugenia", "zhenya"],
+    "егор": ["egor"],
+    "иван": ["ivan", "vano"],
+    "игорь": ["igor"],
+    "илья": ["ilya", "ilia"],
+    "кирилл": ["kirill", "cyril"],
+    "константин": ["konstantin", "kostya"],
+    "лев": ["lev", "leo"],
+    "леонид": ["leonid", "leo"],
+    "максим": ["maxim", "maksim", "max"],
+    "михаил": ["mikhail", "michael", "misha"],
+    "никита": ["nikita", "nick"],
+    "николай": ["nikolay", "nikolai", "nick"],
+    "олег": ["oleg"],
+    "павел": ["pavel", "paul", "pasha"],
+    "петр": ["petr", "peter", "pyotr"],
+    "пётр": ["petr", "peter", "pyotr"],
+    "роман": ["roman", "roma"],
+    "ростислав": ["rostislav"],
+    "руслан": ["ruslan"],
+    "сергей": ["sergey", "sergei", "serge"],
+    "станислав": ["stanislav", "stas"],
+    "степан": ["stepan", "stephen"],
+    "тимофей": ["timofey", "tim"],
+    "тимур": ["timur", "tim"],
+    "федор": ["fedor", "fyodor"],
+    "фёдор": ["fedor", "fyodor"],
+    "юрий": ["yury", "yuriy", "yuri"],
+    "ярослав": ["yaroslav"],
+    # Женские
+    "алена": ["alena", "elena"],
+    "алёна": ["alena", "elena"],
+    "алина": ["alina"],
+    "анастасия": ["anastasia", "nastya"],
+    "анна": ["anna", "ann", "anya"],
+    "валерия": ["valeria", "valeriya", "lera"],
+    "вектория": ["victoria", "viktoria", "vika"],
+    "виктория": ["victoria", "viktoria", "vika"],
+    "дарья": ["daria", "dariya", "dasha"],
+    "евгения": ["evgenia", "evgeniya"],
+    "екатерина": ["ekaterina", "kate", "katya"],
+    "елена": ["elena", "helen", "lena"],
+    "ирина": ["irina", "ira"],
+    "ксения": ["ksenia", "kseniya", "ksenia"],
+    "марина": ["marina"],
+    "мария": ["maria", "mary", "masha"],
+    "надежда": ["nadezhda", "nadia"],
+    "наталья": ["natalia", "nataliya", "natasha"],
+    "оксана": ["oksana"],
+    "ольга": ["olga", "olya"],
+    "полина": ["polina"],
+    "светлана": ["svetlana", "sveta"],
+    "татьяна": ["tatiana", "tatyana", "tanya"],
+    "юлия": ["yulia", "yuliya"]
+}
+
+FEMALE_FIRST_NAMES: Set[str] = {
     "анна", "елена", "ольга", "татьяна", "екатерина", "мария", "наталья", "наталия",
     "светлана", "юлия", "анастасия", "ирина", "оксана", "дарья", "марина", "людмила",
     "галина", "надежда", "евгения", "алена", "алёна", "полина", "валерия", "кристина",
-    "виктория", "вера", "любовь", "алина", "диана", "ксеня", "ксения", "инна", "кира"
+    "виктория", "вера", "любовь", "алина", "диана", "ксеня", "ксения", "инна", "кира",
+    "лариса", "любовь", "нина", "тамара", "ярослава", "жанна", "антонина", "снежана"
 }
 
-MALE_FIRST_NAMES = {
+MALE_FIRST_NAMES: Set[str] = {
     "иван", "алексей", "сергей", "александр", "дмитрий", "михаил", "андрей", "владимир",
     "роман", "артем", "артём", "максим", "евгений", "дени", "денис", "илья", "павел",
     "константин", "николай", "виктор", "игорь", "григорий", "тигран", "герман", "лев",
-    "олег", "вячеслав", "станислав", "артур", "руслан", "виталий", "тимур", "рустам", "кирилл"
+    "олег", "вячеслав", "станислав", "артур", "руслан", "виталий", "тимур", "рустам", "кирилл",
+    "борис", "вадим", "валентин", "василий", "геннадий", "георгий", "даниил", "данила", "егор",
+    "леонид", "матвей", "никита", "петр", "пётр", "ростислав", "семен", "семён", "степан",
+    "тимофей", "федор", "фёдор", "юрий", "ярослав", "эдуард", "ян", "арсений", "владлен"
 }
 
 PREFIX_CLEANUP = re.compile(
-    r'\b(д\.т\.н\.|к\.т\.н\.|к\.э\.н\.|д\.э\.н\.|г-н|г-жа|проф\.|доц\.|директор|генеральный|президент|руководитель)\b',
+    r'\b(д\.т\.н\.|к\.т\.н\.|к\.э\.н\.|д\.э\.н\.|д\.ю\.н\.|к\.ю\.н\.|г-н|г-жа|проф\.|доц\.|'
+    r'директор|генеральный|президент|руководитель|ип|учредитель|советник|зам\.|заместитель)\b',
     re.IGNORECASE
 )
 
@@ -56,7 +144,6 @@ def transliterate(text: str, use_alt: bool = False) -> str:
         result.append(table.get(char, char))
     
     joined = "".join(result).replace("_dash_", "-")
-    # Удаляем любые недопустимые для имени email символы (кроме дефиса и подчеркивания)
     cleaned = re.sub(r'[^a-z0-9\-_]', '', joined)
     return cleaned
 
@@ -64,26 +151,43 @@ def transliterate(text: str, use_alt: bool = False) -> str:
 def transliterate_variants(text: str) -> List[str]:
     """
     Возвращает список уникальных вариантов транслитерации
-    (основной ГОСТ/B2B и альтернативный ICAO).
+    (основной ГОСТ/B2B, альтернативный ICAO и англоязычные алиасы).
     """
-    v1 = transliterate(text, use_alt=False)
-    v2 = transliterate(text, use_alt=True)
-    res = [v1]
-    if v2 and v2 != v1 and v2 not in res:
+    if not text:
+        return [""]
+    text_clean = text.lower().strip()
+    v1 = transliterate(text_clean, use_alt=False)
+    v2 = transliterate(text_clean, use_alt=True)
+    
+    res = [v1] if v1 else []
+    if v2 and v2 not in res:
         res.append(v2)
-    return res
+
+    # Проверяем алиасы (например, для Александр -> alex, sasha)
+    if text_clean in NAME_ALIASES:
+        for alias in NAME_ALIASES[text_clean]:
+            if alias not in res:
+                res.append(alias)
+
+    return res if res else [""]
 
 
 def split_russian_name(full_name: str) -> Tuple[str, str, str]:
     """
     Интеллектуальный парсер ФИО:
-    Разбирает 'Иванов Иван Иванович', 'Иван Иванов', 'Мамин-Сибиряк Дмитрий', 'Иванова Анна'
+    Разбирает форматы:
+    - 'Иванов Иван Иванович' (Фамилия Имя Отчество)
+    - 'Иван Иванов' (Имя Фамилия)
+    - 'Иванов Иван' (Фамилия Имя)
+    - 'Мамин-Сибиряк Дмитрий Наркисович' (Составная фамилия)
+    - 'Иванова Анна Сергеевна'
     Возвращает кортеж: (Фамилия, Имя, Отчество)
     """
     if not full_name:
         return "", "", ""
     
     cleaned = PREFIX_CLEANUP.sub("", full_name)
+    cleaned = re.sub(r'[\(\)\[\]"\'«»]', '', cleaned)
     parts = [p.strip().capitalize() for p in cleaned.split() if p.strip()]
     if not parts:
         return "", "", ""
@@ -96,10 +200,10 @@ def split_russian_name(full_name: str) -> Tuple[str, str, str]:
 
     last_name_suffixes = (
         'ов', 'ев', 'ин', 'ын', 'ский', 'цкий', 'ова', 'ева', 'ина', 'ына',
-        'ская', 'цкая', 'ко', 'ых', 'их', 'дзе', 'швили', 'ян', 'янц', 'ич'
+        'ская', 'цкая', 'ко', 'ых', 'их', 'дзе', 'швили', 'ян', 'янц', 'ич', 'ук', 'юк'
     )
     patronymic_suffixes = (
-        'ович', 'евич', 'ич', 'овна', 'евна', 'ична', 'кызы', 'оглы'
+        'ович', 'евич', 'ич', 'овна', 'евна', 'ична', 'кызы', 'оглы', 'улы'
     )
 
     if len(parts) == 2:
@@ -117,7 +221,6 @@ def split_russian_name(full_name: str) -> Tuple[str, str, str]:
         elif p2_l.endswith(last_name_suffixes) and not p1_l.endswith(last_name_suffixes):
             return p2, p1, ""
         elif p1_l in MALE_FIRST_NAMES or p1_l in FEMALE_FIRST_NAMES:
-            # Первый элемент — имя (например, Иван Смирнов)
             return p2, p1, ""
         
         # По умолчанию: Фамилия Имя
@@ -149,7 +252,7 @@ def detect_gender(last_name: str, first_name: str, middle_name: str) -> str:
     """
     m_lower = (middle_name or "").lower().strip()
     if m_lower:
-        if m_lower.endswith(('ович', 'евич', 'ич', 'оглы')):
+        if m_lower.endswith(('ович', 'евич', 'ич', 'оглы', 'улы')):
             return "male"
         elif m_lower.endswith(('овна', 'евна', 'ична', 'кызы')):
             return "female"
@@ -173,13 +276,20 @@ def detect_gender(last_name: str, first_name: str, middle_name: str) -> str:
     return "unknown"
 
 
-def get_salutation(full_name: str, formal: bool = True) -> str:
+def get_salutation(full_name: str, formal: bool = True, style: str = "business") -> str:
     """
-    Формирует корректное и вежливое русское деловое приветствие для B2B cold email:
-    'Уважаемый Иван Иванович!' / 'Уважаемая Анна Сергеевна!' / 'Здравствуйте, Иван!'
+    Формирует корректное и вежливое русское деловое приветствие для B2B cold outreach:
+    - formal / business: 'Уважаемый Иван Иванович!' / 'Уважаемая Анна Сергеевна!'
+    - direct / modern: 'Здравствуйте, Иван!' / 'Добрый день, Иван!'
+    - executive: 'Иван Иванович, добрый день!'
     """
     last, first, middle = split_russian_name(full_name)
     gender = detect_gender(last, first, middle)
+
+    if style == "executive" and first and middle:
+        return f"{first} {middle}, добрый день!"
+    elif style == "direct" and first:
+        return f"Добрый день, {first}!"
 
     if formal and first and middle:
         prefix = "Уважаемая" if gender == "female" else "Уважаемый"

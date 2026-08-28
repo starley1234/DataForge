@@ -92,6 +92,7 @@ class MockCompanyRegistry:
         {
             "inn": "7736207543",
             "ogrn": "1027700229193",
+            "kpp": "770401001",
             "name": 'ООО "ЯНДЕКС"',
             "short_name": 'Яндекс',
             "okved": "62.01",
@@ -107,7 +108,7 @@ class MockCompanyRegistry:
             "general_phone": "+74957397000",
             "telegram": "https://t.me/yandex",
             "vk": "https://vk.com/yandex",
-            "tags": "IT, Интернет, ИИ, B2B Cloud",
+            "tags": "IT, Интернет, ИИ, B2B Cloud, Яндекс",
             "decision_makers": [
                 {
                     "full_name": "Худавердян Тигран Оганесович",
@@ -128,6 +129,7 @@ class MockCompanyRegistry:
         {
             "inn": "7707083893",
             "ogrn": "1027700132195",
+            "kpp": "773601001",
             "name": 'ПАО "СБЕРБАНК"',
             "short_name": 'Сбер',
             "okved": "64.19",
@@ -143,7 +145,7 @@ class MockCompanyRegistry:
             "general_phone": "+74955005550",
             "telegram": "https://t.me/sberbank",
             "vk": "https://vk.com/sber",
-            "tags": "Банки, Финтех, Экосистема, Инвестиции",
+            "tags": "Банки, Финтех, Экосистема, Инвестиции, Сбербанк",
             "decision_makers": [
                 {
                     "full_name": "Греф Герман Оскарович",
@@ -163,6 +165,7 @@ class MockCompanyRegistry:
         {
             "inn": "7802849641",
             "ogrn": "1147847032838",
+            "kpp": "780201001",
             "name": 'ООО "ПК "БАЛТИКА"',
             "short_name": 'Балтика',
             "okved": "11.05",
@@ -177,7 +180,7 @@ class MockCompanyRegistry:
             "general_email": "ru_post@baltika.com",
             "general_phone": "+78123299100",
             "vk": "https://vk.com/baltika_career",
-            "tags": "FMCG, Производство, Пищевая промышленность",
+            "tags": "FMCG, Производство, Пищевая промышленность, Балтика",
             "decision_makers": [
                 {
                     "full_name": "Визир Дмитрий Михайлович",
@@ -196,6 +199,7 @@ class MockCompanyRegistry:
         {
             "inn": "7743003908",
             "ogrn": "1027700140236",
+            "kpp": "774301001",
             "name": 'АО "ЛАБОРАТОРИЯ КАСПЕРСКОГО"',
             "short_name": 'Kaspersky',
             "okved": "62.01",
@@ -211,7 +215,7 @@ class MockCompanyRegistry:
             "general_phone": "+74957978700",
             "telegram": "https://t.me/kasperskylab",
             "vk": "https://vk.com/kaspersky",
-            "tags": "Кибербезопасность, IT, B2B Enterprise",
+            "tags": "Кибербезопасность, IT, B2B Enterprise, Касперский",
             "decision_makers": [
                 {
                     "full_name": "Касперский Евгений Валентинович",
@@ -231,6 +235,7 @@ class MockCompanyRegistry:
         {
             "inn": "7714595571",
             "ogrn": "1057746522511",
+            "kpp": "771401001",
             "name": 'ООО "1С"',
             "short_name": '1С',
             "okved": "62.02",
@@ -245,7 +250,7 @@ class MockCompanyRegistry:
             "general_email": "1c@1c.ru",
             "general_phone": "+74957379257",
             "telegram": "https://t.me/one_c_official",
-            "tags": "ERP, Автоматизация, Бухгалтерия, B2B IT",
+            "tags": "ERP, Автоматизация, Бухгалтерия, B2B IT, 1С",
             "decision_makers": [
                 {
                     "full_name": "Нуралиев Борис Георгиевич",
@@ -259,6 +264,7 @@ class MockCompanyRegistry:
         {
             "inn": "3528000597",
             "ogrn": "1023501236901",
+            "kpp": "352801001",
             "name": 'ПАО "СЕВЕРСТАЛЬ"',
             "short_name": 'Северсталь',
             "okved": "24.10",
@@ -272,7 +278,7 @@ class MockCompanyRegistry:
             "address": "162608, Вологодская обл., г. Череповец, ул. Мира, д. 30",
             "general_email": "severstal@severstal.com",
             "general_phone": "+78202535300",
-            "tags": "Металлургия, Промышленность, Экспорт, B2B сырье",
+            "tags": "Металлургия, Промышленность, Экспорт, B2B сырье, Северсталь",
             "decision_makers": [
                 {
                     "full_name": "Шевелев Александр Анатольевич",
@@ -291,6 +297,7 @@ class MockCompanyRegistry:
         {
             "inn": "7704217370",
             "ogrn": "1027739244741",
+            "kpp": "770301001",
             "name": 'ООО "ИНТЕРНЕТ РЕШЕНИЯ"',
             "short_name": 'OZON',
             "okved": "47.91",
@@ -323,6 +330,7 @@ class MockCompanyRegistry:
         {
             "inn": "7707049388",
             "ogrn": "1027700198767",
+            "kpp": "784001001",
             "name": 'ПАО "РОСТЕЛЕКОМ"',
             "short_name": 'Ростелеком',
             "okved": "61.10",
@@ -355,6 +363,7 @@ class MockCompanyRegistry:
         {
             "inn": "2309085638",
             "ogrn": "1032304945947",
+            "kpp": "231001001",
             "name": 'ПАО "МАГНИТ"',
             "short_name": 'Магнит',
             "okved": "47.11",
@@ -387,6 +396,7 @@ class MockCompanyRegistry:
         {
             "inn": "7734443270",
             "ogrn": "1217700253671",
+            "kpp": "773401001",
             "name": 'ООО "ВКУСВИЛЛ"',
             "short_name": 'ВкусВилл',
             "okved": "47.29",
@@ -415,6 +425,162 @@ class MockCompanyRegistry:
                     "source": "website"
                 }
             ]
+        },
+        {
+            "inn": "7710668322",
+            "ogrn": "1077746777777",
+            "kpp": "771001001",
+            "name": 'ООО "КЕХ ЕКОММЕРЦ"',
+            "short_name": 'Авито',
+            "okved": "63.11",
+            "okved_name": "Деятельность по обработке данных, предоставление услуг по размещению информации",
+            "revenue_rub": 100000000000,
+            "employees_count": 7000,
+            "website": "avito.ru",
+            "domain": "avito.ru",
+            "region": "г. Москва",
+            "city": "Москва",
+            "address": "125196, г. Москва, ул. Лесная, д. 7",
+            "general_email": "b2b@avito.ru",
+            "general_phone": "+78006000001",
+            "telegram": "https://t.me/avitolive",
+            "tags": "IT, Классифайд, E-Commerce, B2B Сервисы, Авито",
+            "decision_makers": [
+                {
+                    "full_name": "Правдивый Владимир Анатольевич",
+                    "title": "Генеральный директор",
+                    "role_level": "C-Level",
+                    "source": "egrul"
+                },
+                {
+                    "full_name": "Гришин Иван Сергеевич",
+                    "title": "Директор B2B направления",
+                    "role_level": "Director",
+                    "source": "website"
+                }
+            ]
+        },
+        {
+            "inn": "7710140679",
+            "ogrn": "1027739642281",
+            "kpp": "773401001",
+            "name": 'АО "ТБАНК"',
+            "short_name": 'Т-Банк',
+            "okved": "64.19",
+            "okved_name": "Денежное посредничество прочее",
+            "revenue_rub": 450000000000,
+            "employees_count": 65000,
+            "website": "tbank.ru",
+            "domain": "tbank.ru",
+            "region": "г. Москва",
+            "city": "Москва",
+            "address": "127287, г. Москва, ул. Хуторская 2-я, д. 38А, стр. 26",
+            "general_email": "corp@tbank.ru",
+            "general_phone": "+78005557778",
+            "telegram": "https://t.me/t_bank",
+            "tags": "Финтех, Банки, B2B Эквайринг, Т-Банк, Тинькофф",
+            "decision_makers": [
+                {
+                    "full_name": "Близнюк Станислав Евгеньевич",
+                    "title": "Председатель Правления",
+                    "role_level": "C-Level",
+                    "source": "egrul"
+                },
+                {
+                    "full_name": "Пирожков Илья Дмитриевич",
+                    "title": "Директор по развитию B2B продуктов",
+                    "role_level": "Director",
+                    "source": "website"
+                }
+            ]
+        },
+        {
+            "inn": "7707329188",
+            "ogrn": "1147748003639",
+            "kpp": "770301001",
+            "name": 'ООО "ЛОГНЕКС"',
+            "short_name": 'МойСклад',
+            "okved": "62.01",
+            "okved_name": "Разработка компьютерного программного обеспечения",
+            "revenue_rub": 2500000000,
+            "employees_count": 350,
+            "website": "moysklad.ru",
+            "domain": "moysklad.ru",
+            "region": "г. Москва",
+            "city": "Москва",
+            "address": "123112, г. Москва, Пресненская наб., д. 12",
+            "general_email": "sales@moysklad.ru",
+            "general_phone": "+74952280044",
+            "telegram": "https://t.me/moysklad",
+            "tags": "SaaS, ERP, Торговля, Склад, B2B Cloud, МойСклад",
+            "decision_makers": [
+                {
+                    "full_name": "Казанцев Олег Игоревич",
+                    "title": "Генеральный директор",
+                    "role_level": "C-Level",
+                    "source": "egrul"
+                },
+                {
+                    "full_name": "Батурин Александр Вадимович",
+                    "title": "Коммерческий директор",
+                    "role_level": "Director",
+                    "source": "website"
+                }
+            ]
+        },
+        {
+            "inn": "7810138853",
+            "ogrn": "1027810229340",
+            "kpp": "781001001",
+            "name": 'ООО "ДЕЛОВЫЕ ЛИНИИ"',
+            "short_name": 'Деловые Линии',
+            "okved": "49.41",
+            "okved_name": "Деятельность автомобильного грузового транспорта",
+            "revenue_rub": 60000000000,
+            "employees_count": 20000,
+            "website": "dellin.ru",
+            "domain": "dellin.ru",
+            "region": "г. Санкт-Петербург",
+            "city": "Санкт-Петербург",
+            "address": "196210, г. Санкт-Петербург, ул. Стартовая, д. 8, лит. А",
+            "general_email": "pismo@dellin.ru",
+            "general_phone": "+78001008000",
+            "tags": "Логистика, B2B Грузоперевозки, Доставка, Деловые Линии",
+            "decision_makers": [
+                {
+                    "full_name": "Богатиков Фарид Равильевич",
+                    "title": "Генеральный директор",
+                    "role_level": "C-Level",
+                    "source": "egrul"
+                }
+            ]
+        },
+        {
+            "inn": "7707434955",
+            "ogrn": "1197746618580",
+            "kpp": "771001001",
+            "name": 'ПАО "ГРУППА АСТРА"',
+            "short_name": 'Группа Астра',
+            "okved": "62.01",
+            "okved_name": "Разработка компьютерного ПО и операционных систем",
+            "revenue_rub": 9500000000,
+            "employees_count": 2000,
+            "website": "astralinux.ru",
+            "domain": "astralinux.ru",
+            "region": "г. Москва",
+            "city": "Москва",
+            "address": "125167, г. Москва, Ленинградский пр-кт, д. 37, корп. 9",
+            "general_email": "info@astralinux.ru",
+            "general_phone": "+74953694816",
+            "tags": "Импортозамещение, ОС Astra Linux, IT B2B, Группа Астра",
+            "decision_makers": [
+                {
+                    "full_name": "Сивцев Илья Игоревич",
+                    "title": "Генеральный директор",
+                    "role_level": "C-Level",
+                    "source": "egrul"
+                }
+            ]
         }
     ]
 
@@ -429,7 +595,7 @@ class MockCompanyRegistry:
     def find_by_inn(self, inn: str) -> Optional[Company]:
         q = (inn or "").strip()
         for d in self.SAMPLE_DATA:
-            if d["inn"] == q or d.get("ogrn") == q:
+            if d["inn"] == q or d.get("ogrn") == q or d.get("kpp") == q:
                 dms = [DecisionMaker(**dm, company_inn=d["inn"], company_name=d["name"]) for dm in d["decision_makers"]]
                 c_dict = {k: v for k, v in d.items() if k != "decision_makers"}
                 return Company(**c_dict, decision_makers=dms, source="sample_registry")
@@ -439,12 +605,11 @@ class MockCompanyRegistry:
         q = (query or "").strip().lower()
         if not q:
             return None
-        # Поиск по ИНН/ОГРН
+        # Поиск по ИНН/ОГРН/КПП
         by_inn = self.find_by_inn(q)
         if by_inn:
             return by_inn
 
-        # Поиск по названию с поддержкой корней слов
         q_words = [w.strip(" \"'«»") for w in q.split() if len(w.strip(" \"'«»")) >= 3]
         for d in self.SAMPLE_DATA:
             full_text = f"{d['name']} {d.get('short_name', '')} {d.get('tags', '')}".lower()

@@ -8,12 +8,11 @@ import urllib3
 from validator import normalize_phone, validate_email_syntax, is_role_based_email
 from config import settings
 
-# Отключаем предупреждения о самоподписанных SSL-сертификатах предприятий
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     "Cache-Control": "no-cache"
@@ -27,7 +26,7 @@ ROLE_LEVEL_MAPPINGS = [
     (["коммерческий директор", "технический директор", "финансовый директор",
       "операционный директор", "директор по маркетингу", "директор по развитию",
       "директор по продажам", "директор по логистике", "директор по закупкам",
-      "директор по персоналу", "hr-директор", "it-директор", "cto", "cfo", "cmo", "coo", "cio"], "Director"),
+      "директор по персоналу", "hr-директор", "it-директор", "cto", "cfo", "cmo", "coo", "cio", "ciso"], "Director"),
     # Head / Руководитель
     (["руководитель отдела", "начальник управления", "главный бухгалтер",
       "главный инженер", "заместитель директора", "руководитель проектов",
@@ -50,7 +49,7 @@ STOP_NAME_WORDS = {
     "главная", "россия", "москва", "контакты", "политика", "компания",
     "новости", "услуги", "продукция", "каталог", "вакансии", "отзывы",
     "проекты", "наши", "партнеры", "информация", "реквизиты", "адрес",
-    "телефон", "схема", "проезда", "время", "работы", "режим"
+    "телефон", "схема", "проезда", "время", "работы", "режим", "сертификат"
 }
 
 
@@ -63,19 +62,16 @@ class WebsiteScraper:
         raw_emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', text)
         valid: List[str] = []
         for e in set(raw_emails):
-            # Очищаем от случайных знаков препинания на конце (точка, запятая, скобка)
             e_clean = e.lower().strip().rstrip('.,;:)"\'')
             if any(bad in e_clean for bad in IGNORE_EMAIL_SUBSTRINGS):
                 continue
             if validate_email_syntax(e_clean):
                 valid.append(e_clean)
         
-        # Сортируем: сначала почты на домене компании
         valid.sort(key=lambda x: (domain in x if domain else True, not is_role_based_email(x)), reverse=True)
         return list(dict.fromkeys(valid))
 
     def _extract_phones(self, text: str) -> List[Dict[str, Any]]:
-        # Паттерны телефонов: +7..., 8 (xxx)..., 8-800...
         raw_phones = re.findall(
             r'(?:(?:\+7|8)[\s\-\(]*)?(?:\d{3,4})[\s\-\)]*\d{2,3}[\s\-]*\d{2}[\s\-]*\d{2}',
             text
@@ -137,14 +133,13 @@ class WebsiteScraper:
         return reqs
 
     def _extract_persons(self, soup: BeautifulSoup, page_url: str) -> List[Dict[str, Any]]:
-        """Интеллектуальный поиск блоков руководителей и контактных лиц."""
+        """Интеллектуальный поиск карточек руководителей и контактных лиц."""
         persons: List[Dict[str, Any]] = []
         seen_names = set()
 
-        # Ищем карточки сотрудников
         containers = soup.find_all(
             ["div", "section", "article", "li", "tr"],
-            class_=re.compile(r'(team|member|person|leader|staff|about|worker|employee|card|profile)', re.I)
+            class_=re.compile(r'(team|member|person|leader|staff|about|worker|employee|card|profile|management)', re.I)
         )
 
         for cont in containers:
@@ -152,7 +147,6 @@ class WebsiteScraper:
             matched_title = None
             matched_role_level = "Director"
 
-            # Проверяем наличие ключевых слов должностей
             t_lower = text.lower()
             for keywords, role_lvl in ROLE_LEVEL_MAPPINGS:
                 for kw in keywords:
@@ -166,7 +160,6 @@ class WebsiteScraper:
             if not matched_title:
                 continue
 
-            # Ищем ФИО (2-3 русских слова с заглавной буквы)
             name_matches = re.findall(r'\b([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})\b', text)
             for raw_name in name_matches:
                 parts = [p.strip() for p in raw_name.split() if p.strip()]
@@ -180,7 +173,6 @@ class WebsiteScraper:
                 if full_name not in seen_names:
                     seen_names.add(full_name)
 
-                    # Ищем персональный email и телефон внутри той же карточки
                     direct_email = None
                     direct_phone = None
 
@@ -257,7 +249,6 @@ class WebsiteScraper:
                         html_text = resp.text
                         soup = BeautifulSoup(html_text, "html.parser")
 
-                        # Извлекаем контакты со страницы
                         results["emails"].extend(self._extract_emails(html_text, domain))
                         results["phones"].extend(self._extract_phones(html_text))
 
@@ -273,7 +264,7 @@ class WebsiteScraper:
                         extracted_persons = self._extract_persons(soup, current_url)
                         results["persons"].extend(extracted_persons)
 
-                        # Если это первая страница, ищем ссылки на контакты / команду
+                        # Если это главная страница, ищем ссылки на контакты / команду
                         if idx == 1:
                             for a in soup.find_all("a", href=True):
                                 href = a["href"].strip()
@@ -288,7 +279,6 @@ class WebsiteScraper:
                 except Exception:
                     pass
 
-        # Дедупликация и нормализация
         results["emails"] = list(dict.fromkeys(results["emails"]))
 
         unique_phones = []
@@ -302,7 +292,6 @@ class WebsiteScraper:
         for k in results["socials"]:
             results["socials"][k] = list(set(results["socials"][k]))
 
-        # Дедупликация персон по ФИО
         unique_persons = []
         seen_person_names = set()
         for p in results["persons"]:

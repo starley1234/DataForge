@@ -1,19 +1,23 @@
 import os
 import io
+import time
+import uuid
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from fastapi import FastAPI, Request, Query, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi import FastAPI, Request, Query, UploadFile, File, Form, HTTPException, Response
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from engine import EnrichmentEngine
 from email_generator import generate_email_permutations
 from validator import verify_email_full, normalize_phone
+from deliverability import analyze_domain_deliverability
 from exporter import (
     export_to_csv, export_to_excel, export_to_amocrm_csv,
-    export_to_bitrix24_csv, export_to_json, generate_outreach_email
+    export_to_bitrix24_csv, export_to_hubspot_csv, export_to_vcard,
+    export_to_json, generate_outreach_email, generate_cold_calling_script
 )
 from batch_processor import BatchProcessor
 from config import settings
@@ -26,7 +30,7 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Разрешаем CORS для веб-интерфейса и внешних интеграций
+# Разрешаем CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,7 +43,19 @@ engine = EnrichmentEngine()
 batch_processor = BatchProcessor(engine)
 
 
-# Pydantic schemas for API requests
+# Middleware: тайминг выполнения запросов и request ID
+@app.middleware("http")
+async def add_process_time_and_request_id(request: Request, call_next):
+    req_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Request-ID"] = req_id
+    response.headers["X-Process-Time-Sec"] = f"{process_time:.4f}"
+    return response
+
+
+# Pydantic Schemas for Requests
 class LeadUpdateRequest(BaseModel):
     dm_full_name: Optional[str] = None
     dm_title: Optional[str] = None
@@ -48,7 +64,11 @@ class LeadUpdateRequest(BaseModel):
     email_status: Optional[str] = None
     dm_phone: Optional[str] = None
     dm_phone_type: Optional[str] = None
+    phone_carrier: Optional[str] = None
+    phone_timezone: Optional[str] = None
     dm_telegram: Optional[str] = None
+    dm_vk: Optional[str] = None
+    dm_tenchat: Optional[str] = None
     lead_status: Optional[str] = None
     notes: Optional[str] = None
     confidence_score: Optional[int] = None
@@ -59,12 +79,22 @@ class ManualLeadCreateRequest(BaseModel):
     company_name: str
     website: Optional[str] = None
     region: Optional[str] = None
+    okved_name: Optional[str] = None
     dm_full_name: str
     dm_title: Optional[str] = "Генеральный директор"
     dm_role_level: Optional[str] = "C-Level"
     dm_email: Optional[str] = None
     dm_phone: Optional[str] = None
     notes: Optional[str] = None
+
+
+class BulkStatusRequest(BaseModel):
+    lead_ids: List[int]
+    status: str
+
+
+class BulkDeleteRequest(BaseModel):
+    lead_ids: List[int]
 
 
 class PermutationReq(BaseModel):
@@ -80,11 +110,24 @@ class VerifyEmailReq(BaseModel):
 
 class VerifyPhoneReq(BaseModel):
     phone: str
+    default_region: str = "RU"
+
+
+class DeliverabilityReq(BaseModel):
+    domain: str
 
 
 class OutreachReq(BaseModel):
     lead_id: int
     offer_type: str = "partnership"
+    sender_name: Optional[str] = "[Ваше Имя]"
+    sender_company: Optional[str] = "[Ваша Компания]"
+    sender_title: Optional[str] = "[Ваша Должность]"
+    sender_phone: Optional[str] = "[Ваш Телефон]"
+
+
+class ColdCallScriptReq(BaseModel):
+    lead_id: int
 
 
 class BatchStartReq(BaseModel):
@@ -104,8 +147,30 @@ def health():
         "status": "healthy",
         "service": settings.APP_TITLE,
         "version": settings.APP_VERSION,
+        "database": "connected",
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def get_metrics():
+    """Prometheus-совместимый эндпоинт метрик системы."""
+    stats = engine.get_dashboard_stats()
+    metrics = [
+        f"# HELP b2b_total_companies Total companies stored in database",
+        f"# TYPE b2b_total_companies gauge",
+        f"b2b_total_companies {stats['total_companies']}",
+        f"# HELP b2b_total_leads Total decision makers stored in database",
+        f"# TYPE b2b_total_leads gauge",
+        f"b2b_total_leads {stats['total_dms']}",
+        f"# HELP b2b_valid_emails Total verified MX emails",
+        f"# TYPE b2b_valid_emails gauge",
+        f"b2b_valid_emails {stats['valid_emails_count']}",
+        f"# HELP b2b_direct_mobiles Total mobile numbers",
+        f"# TYPE b2b_direct_mobiles gauge",
+        f"b2b_direct_mobiles {stats['mobile_phones_count']}"
+    ]
+    return "\n".join(metrics) + "\n"
 
 
 @app.get("/api/stats")
@@ -155,10 +220,41 @@ def get_lead_detail(lead_id: int):
     return lead
 
 
+@app.post("/api/leads/manual")
+def create_manual_lead(req: ManualLeadCreateRequest):
+    """Ручное создание организации и контакта ЛПР с автоматическим скорингом."""
+    from models import Company, DecisionMaker
+    
+    dm = DecisionMaker(
+        company_inn=req.inn.strip(),
+        company_name=req.company_name.strip(),
+        full_name=req.dm_full_name.strip(),
+        title=req.dm_title or "Генеральный директор",
+        role_level=req.dm_role_level or "C-Level",
+        email=req.dm_email,
+        phone=req.dm_phone,
+        notes=req.notes,
+        source="manual_entry"
+    )
+
+    comp = Company(
+        inn=req.inn.strip(),
+        name=req.company_name.strip(),
+        website=req.website,
+        domain=req.website,
+        region=req.region,
+        okved_name=req.okved_name,
+        decision_makers=[dm],
+        source="manual"
+    )
+
+    saved_comp = engine.enrich_company_and_dms(comp, scrape_web=False, verify_emails=True)
+    return {"status": "ok", "message": "Организация и ЛПР успешно созданы", "company_inn": saved_comp.inn}
+
+
 @app.put("/api/leads/{lead_id}")
 def update_lead(lead_id: int, req: LeadUpdateRequest):
     updates = req.model_dump(exclude_unset=True)
-    # Маппинг ключей API к модели ORM
     field_map = {
         "dm_full_name": "full_name",
         "dm_title": "title",
@@ -167,7 +263,11 @@ def update_lead(lead_id: int, req: LeadUpdateRequest):
         "email_status": "email_status",
         "dm_phone": "phone",
         "dm_phone_type": "phone_type",
+        "phone_carrier": "phone_carrier",
+        "phone_timezone": "phone_timezone",
         "dm_telegram": "telegram",
+        "dm_vk": "vk",
+        "dm_tenchat": "tenchat",
         "lead_status": "lead_status",
         "notes": "notes",
         "confidence_score": "confidence_score"
@@ -191,6 +291,18 @@ def delete_lead(lead_id: int):
     return {"status": "ok", "message": "Контакт удален"}
 
 
+@app.post("/api/leads/bulk-status")
+def bulk_status(req: BulkStatusRequest):
+    updated = engine.bulk_update_lead_status(req.lead_ids, req.status)
+    return {"status": "ok", "updated_count": updated}
+
+
+@app.post("/api/leads/bulk-delete")
+def bulk_delete(req: BulkDeleteRequest):
+    deleted = engine.bulk_delete_leads(req.lead_ids)
+    return {"status": "ok", "deleted_count": deleted}
+
+
 @app.post("/api/enrich/real")
 def enrich_real(inn: str = Query(..., description="ИНН, ОГРН или наименование организации")):
     clean_inn = inn.strip()
@@ -201,6 +313,8 @@ def enrich_real(inn: str = Query(..., description="ИНН, ОГРН или на�
             "company_name": comp.name,
             "inn": comp.inn,
             "domain": comp.domain or comp.website,
+            "solvency_score": comp.solvency_score,
+            "risk_level": comp.risk_level,
             "dms_count": len(comp.decision_makers),
             "dms": [
                 {
@@ -210,6 +324,8 @@ def enrich_real(inn: str = Query(..., description="ИНН, ОГРН или на�
                     "email": dm.email,
                     "email_status": dm.email_status,
                     "phone": dm.phone,
+                    "phone_carrier": dm.phone_carrier,
+                    "phone_timezone": dm.phone_timezone,
                     "confidence": dm.confidence_score
                 }
                 for dm in comp.decision_makers
@@ -269,6 +385,12 @@ def batch_status(task_id: str):
     return info
 
 
+@app.post("/api/batch/cancel/{task_id}")
+def batch_cancel(task_id: str):
+    res = batch_processor.cancel_task(task_id)
+    return {"status": "ok" if res else "error", "cancelled": res}
+
+
 @app.post("/api/tools/generate-email")
 def tool_generate_email(req: PermutationReq):
     perms = generate_email_permutations(req.full_name, req.domain, known_pattern=req.known_pattern)
@@ -283,7 +405,13 @@ def tool_verify_email(req: VerifyEmailReq):
 
 @app.post("/api/tools/verify-phone")
 def tool_verify_phone(req: VerifyPhoneReq):
-    res = normalize_phone(req.phone)
+    res = normalize_phone(req.phone, default_region=req.default_region)
+    return {"status": "ok", "result": res}
+
+
+@app.post("/api/tools/deliverability")
+def tool_deliverability(req: DeliverabilityReq):
+    res = analyze_domain_deliverability(req.domain)
     return {"status": "ok", "result": res}
 
 
@@ -292,8 +420,24 @@ def tool_outreach_draft(req: OutreachReq):
     lead = engine.get_lead_by_id(req.lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Лид не найден")
-    draft = generate_outreach_email(lead, offer_type=req.offer_type)
+    draft = generate_outreach_email(
+        lead,
+        offer_type=req.offer_type,
+        sender_name=req.sender_name or "[Ваше Имя]",
+        sender_company=req.sender_company or "[Ваша Компания]",
+        sender_title=req.sender_title or "[Ваша Должность]",
+        sender_phone=req.sender_phone or "[Ваш Телефон]"
+    )
     return {"status": "ok", "draft": draft}
+
+
+@app.post("/api/tools/call-script")
+def tool_call_script(req: ColdCallScriptReq):
+    lead = engine.get_lead_by_id(req.lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Лид не найден")
+    script = generate_cold_calling_script(lead)
+    return {"status": "ok", "script": script}
 
 
 @app.post("/api/leads/reverify")
@@ -338,6 +482,32 @@ def api_export_bitrix24():
     return FileResponse(path, filename="leads_bitrix24.csv", media_type="text/csv")
 
 
+@app.get("/api/export/hubspot")
+def api_export_hubspot():
+    leads = engine.get_all_leads()
+    path = "/tmp/leads_hubspot.csv"
+    export_to_hubspot_csv(leads, path)
+    return FileResponse(path, filename="leads_hubspot.csv", media_type="text/csv")
+
+
+@app.get("/api/export/vcard")
+def api_export_vcard():
+    leads = engine.get_all_leads()
+    path = "/tmp/leads_all.vcf"
+    export_to_vcard(leads, path)
+    return FileResponse(path, filename="leads_b2b_contacts.vcf", media_type="text/vcard")
+
+
+@app.get("/api/leads/{lead_id}/vcard")
+def api_export_single_vcard(lead_id: int):
+    lead = engine.get_lead_by_id(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Контакт не найден")
+    path = f"/tmp/lead_{lead_id}.vcf"
+    export_to_vcard([lead], path)
+    return FileResponse(path, filename=f"contact_{lead_id}.vcf", media_type="text/vcard")
+
+
 @app.get("/api/export/json")
 def api_export_json():
     leads = engine.get_all_leads()
@@ -347,7 +517,7 @@ def api_export_json():
 
 
 # ============================================================================
-# HTML SPA DASHBOARD TEMPLATE
+# HTML SPA DASHBOARD TEMPLATE (ENTERPRISE EDITION)
 # ============================================================================
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -355,7 +525,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>B2B Lead Intelligence — База ЛПР предприятий России</title>
+    <title>B2B Lead Intelligence Enterprise — База ЛПР предприятий России</title>
     <!-- Fonts & Icons -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -374,6 +544,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             --text-muted: #64748b;
             --success: #10b981;
             --warning: #f59e0b;
+            --danger: #ef4444;
         }
 
         body {
@@ -392,13 +563,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .brand-icon {
             background: linear-gradient(135deg, #2563eb, #4f46e5);
             color: #fff;
-            width: 42px;
-            height: 42px;
+            width: 44px;
+            height: 44px;
             border-radius: 12px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.35rem;
+            font-size: 1.4rem;
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
         }
 
@@ -467,7 +638,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         .input-group-search input {
             padding-left: 48px;
-            height: 50px;
+            height: 48px;
             border-radius: 12px;
             border: 1.5px solid #cbd5e1;
             font-size: 0.95rem;
@@ -480,7 +651,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         .filter-select {
-            height: 42px;
+            height: 44px;
             border-radius: 10px;
             border: 1px solid #cbd5e1;
             font-size: 0.88rem;
@@ -528,8 +699,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .badge-verified { background: #dcfce7; color: #166534; }
         .badge-valid_mx { background: #e0f2fe; color: #075985; }
         .badge-generated { background: #fef3c7; color: #92400e; }
+        .badge-catch_all { background: #fef9c3; color: #854d0e; }
         .badge-unverified { background: #f1f5f9; color: #64748b; }
         .badge-invalid { background: #fee2e2; color: #991b1b; }
+
+        .badge-crm {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 6px;
+        }
 
         .btn-action {
             border-radius: 8px;
@@ -564,16 +743,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         .avatar-circle {
-            width: 38px;
-            height: 38px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
-            background: #e2e8f0;
-            color: #475569;
+            background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
+            color: #334155;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
-            font-size: 0.85rem;
+            font-size: 0.88rem;
             flex-shrink: 0;
         }
 
@@ -598,9 +777,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             z-index: 9999;
             background: #0f172a;
             color: #fff;
-            padding: 10px 18px;
+            padding: 12px 20px;
             border-radius: 10px;
-            font-size: 0.88rem;
+            font-size: 0.9rem;
             box-shadow: 0 10px 25px rgba(0,0,0,0.15);
             display: none;
             animation: fadeIn 0.2s ease;
@@ -625,12 +804,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div>
                         <div class="d-flex align-items-center gap-2">
                             <h5 class="mb-0 fw-bold">B2B Lead Enrichment Engine</h5>
-                            <span class="badge bg-primary bg-opacity-10 text-primary">v2.1 Enterprise</span>
+                            <span class="badge bg-primary bg-opacity-10 text-primary">v2.2 Enterprise</span>
                         </div>
-                        <small class="text-muted">Поиск, обогащение и валидация контактов ЛПР предприятий России</small>
+                        <small class="text-muted">Поиск, скоринг, обогащение и валидация контактов ЛПР предприятий РФ</small>
                     </div>
                 </div>
                 <div class="d-flex gap-2">
+                    <button class="btn btn-primary btn-action" onclick="openManualCreateModal()">
+                        <i class="bi bi-plus-circle"></i> Добавить контакт
+                    </button>
                     <div class="dropdown">
                         <button class="btn btn-outline-secondary btn-action dropdown-toggle" type="button" data-bs-toggle="dropdown">
                             <i class="bi bi-download"></i> Экспорт базы
@@ -638,9 +820,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0 rounded-3">
                             <li><a class="dropdown-item py-2" href="/api/export/excel"><i class="bi bi-file-earmark-excel text-success me-2"></i> Экспорт Excel (.xlsx)</a></li>
                             <li><a class="dropdown-item py-2" href="/api/export/csv"><i class="bi bi-filetype-csv text-primary me-2"></i> Экспорт CSV (UTF-8-BOM)</a></li>
+                            <li><a class="dropdown-item py-2" href="/api/export/vcard"><i class="bi bi-person-vcard text-info me-2"></i> Экспорт vCard (.vcf для iPhone/Android)</a></li>
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item py-2" href="/api/export/amocrm"><i class="bi bi-cloud-arrow-up text-warning me-2"></i> Формат для amoCRM</a></li>
-                            <li><a class="dropdown-item py-2" href="/api/export/bitrix24"><i class="bi bi-boxes text-info me-2"></i> Формат для Битрикс24</a></li>
+                            <li><a class="dropdown-item py-2" href="/api/export/amocrm"><i class="bi bi-cloud-arrow-up text-warning me-2"></i> Формат amoCRM</a></li>
+                            <li><a class="dropdown-item py-2" href="/api/export/bitrix24"><i class="bi bi-boxes text-info me-2"></i> Формат Битрикс24</a></li>
+                            <li><a class="dropdown-item py-2" href="/api/export/hubspot"><i class="bi bi-globe text-primary me-2"></i> Формат HubSpot / Salesforce</a></li>
                             <li><a class="dropdown-item py-2" href="/api/export/json"><i class="bi bi-filetype-json text-secondary me-2"></i> Экспорт JSON</a></li>
                         </ul>
                     </div>
@@ -678,7 +862,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </li>
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="tools-tab" data-bs-toggle="tab" data-bs-target="#toolsPane" type="button" role="tab">
-                    <i class="bi bi-tools"></i> Инструменты валидации
+                    <i class="bi bi-tools"></i> Студия валидации и Outreach
                 </button>
             </li>
         </ul>
@@ -731,7 +915,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </div>
                             <div>
                                 <div class="stat-number" id="statPhones">0</div>
-                                <div class="text-muted small fw-medium">Прямых телефонов</div>
+                                <div class="text-muted small fw-medium">Прямых номеров / Часовые пояса</div>
                             </div>
                         </div>
                     </div>
@@ -740,13 +924,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <!-- Блок поиска и фильтрации -->
                 <div class="card-custom mb-4">
                     <div class="row g-3 align-items-end">
-                        <div class="col-lg-4">
+                        <div class="col-lg-3">
                             <label class="form-label fw-bold text-dark small text-uppercase mb-1">
-                                <i class="bi bi-search me-1"></i> Поиск по базе
+                                <i class="bi bi-search me-1"></i> Поиск по всей базе
                             </label>
                             <div class="input-group-search">
                                 <i class="bi bi-search search-icon"></i>
-                                <input type="text" id="filterQuery" class="form-control" placeholder="Поиск по ФИО, компании, ИНН, email, телефону..." oninput="applyFilters()">
+                                <input type="text" id="filterQuery" class="form-control" placeholder="ФИО, компания, ИНН, email, телефон..." oninput="applyFilters()">
                             </div>
                         </div>
                         <div class="col-lg-2 col-md-4">
@@ -771,23 +955,47 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </select>
                         </div>
                         <div class="col-lg-2 col-md-4">
-                            <label class="form-label fw-bold text-dark small text-uppercase mb-1">Статус Email</label>
-                            <select id="filterEmailStatus" class="form-select filter-select" onchange="applyFilters()">
-                                <option value="">Любой статус</option>
-                                <option value="valid_mx">Активный MX</option>
-                                <option value="verified">Verified (проверен)</option>
-                                <option value="generated">Паттерн</option>
+                            <label class="form-label fw-bold text-dark small text-uppercase mb-1">Статус CRM</label>
+                            <select id="filterLeadStatus" class="form-select filter-select" onchange="applyFilters()">
+                                <option value="">Все статусы CRM</option>
+                                <option value="NEW">Новый (NEW)</option>
+                                <option value="CONTACTED">Связались (CONTACTED)</option>
+                                <option value="IN_PROGRESS">В работе (IN_PROGRESS)</option>
+                                <option value="QUALIFIED">Квалифицирован (QUALIFIED)</option>
+                                <option value="MEETING_SCHEDULED">Назначена встреча</option>
+                                <option value="WON">Сделка (WON)</option>
+                                <option value="REJECTED">Отказ (REJECTED)</option>
                             </select>
                         </div>
-                        <div class="col-lg-2">
+                        <div class="col-lg-3">
                             <div class="d-flex gap-2">
-                                <button class="btn btn-outline-secondary w-100 btn-action" style="height: 42px;" onclick="resetFilters()">
-                                    <i class="bi bi-arrow-counterclockwise"></i> Сбросить
+                                <button class="btn btn-outline-secondary w-100 btn-action" style="height: 44px;" onclick="resetFilters()">
+                                    <i class="bi bi-arrow-counterclockwise"></i> Сброс
                                 </button>
-                                <button class="btn btn-outline-primary btn-action" style="height: 42px;" onclick="reverifyAll()" title="Перепроверить все MX DNS">
-                                    <i class="bi bi-shield-check"></i>
+                                <button class="btn btn-outline-primary btn-action" style="height: 44px;" onclick="reverifyAll()" title="Перепроверить все MX DNS">
+                                    <i class="bi bi-shield-check"></i> Ревалидация
                                 </button>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Панель массовых действий -->
+                    <div id="bulkActionsBar" class="mt-3 pt-3 border-top d-flex align-items-center justify-content-between" style="display: none !important;">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-primary fs-6" id="bulkSelectedCount">0</span>
+                            <span class="small fw-semibold text-dark">контактов выбрано</span>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <select id="bulkStatusSelect" class="form-select form-select-sm" style="width: 170px;">
+                                <option value="CONTACTED">Статус: Связались</option>
+                                <option value="IN_PROGRESS">Статус: В работе</option>
+                                <option value="QUALIFIED">Статус: Квалифицирован</option>
+                                <option value="MEETING_SCHEDULED">Статус: Встреча</option>
+                                <option value="WON">Статус: Сделка</option>
+                                <option value="REJECTED">Статус: Отказ</option>
+                            </select>
+                            <button class="btn btn-sm btn-primary" onclick="applyBulkStatus()">Применить статус</button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="applyBulkDelete()">Удалить выбранные</button>
                         </div>
                     </div>
                 </div>
@@ -798,16 +1006,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <table class="table table-custom mb-0">
                             <thead>
                                 <tr>
-                                    <th style="width: 26%;">Организация / Реквизиты</th>
-                                    <th style="width: 24%;">ЛПР (Лицо, принимающее решения)</th>
-                                    <th style="width: 22%;">Корпоративный Email</th>
-                                    <th style="width: 16%;">Телефон</th>
-                                    <th style="width: 12%; text-align: right;">Действия</th>
+                                    <th style="width: 4%;"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)"></th>
+                                    <th style="width: 25%;">Организация / Реквизиты</th>
+                                    <th style="width: 23%;">ЛПР (Лицо, принимающее решения)</th>
+                                    <th style="width: 20%;">Корпоративный Email</th>
+                                    <th style="width: 18%;">Телефон и Время</th>
+                                    <th style="width: 10%; text-align: right;">Действия</th>
                                 </tr>
                             </thead>
                             <tbody id="leadsTableBody">
                                 <tr>
-                                    <td colspan="5" class="text-center py-5 text-muted">
+                                    <td colspan="6" class="text-center py-5 text-muted">
                                         <div class="spinner-border text-primary spinner-border-sm me-2"></div>
                                         Загрузка контактов...
                                     </td>
@@ -832,14 +1041,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </div>
                     <div class="col-lg-6">
                         <div class="card-custom h-100">
-                            <h6 class="fw-bold mb-3"><i class="bi bi-bar-chart-fill text-success me-2"></i> Топ регионов предприятий</h6>
+                            <h6 class="fw-bold mb-3"><i class="bi bi-bar-chart-fill text-success me-2"></i> Воронка статусов в CRM</h6>
                             <div style="height: 280px; position: relative;">
+                                <canvas id="chartCRM"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="card-custom h-100">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-geo-alt-fill text-info me-2"></i> Топ регионов предприятий</h6>
+                            <div style="height: 260px; position: relative;">
                                 <canvas id="chartRegions"></canvas>
                             </div>
                         </div>
                     </div>
-                    <div class="col-12">
-                        <div class="card-custom">
+                    <div class="col-lg-6">
+                        <div class="card-custom h-100">
                             <h6 class="fw-bold mb-3"><i class="bi bi-diagram-3-fill text-warning me-2"></i> Отраслевая структура базы (ОКВЭД)</h6>
                             <div style="height: 260px; position: relative;">
                                 <canvas id="chartIndustries"></canvas>
@@ -855,17 +1072,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="col-lg-8">
                         <div class="card-custom mb-4">
                             <h5 class="fw-bold mb-2"><i class="bi bi-cloud-arrow-down-fill text-primary me-2"></i> Обогащение компании из ЕГРЮЛ ФНС РФ</h5>
-                            <p class="text-muted small">Введите ИНН (10 или 12 цифр), ОГРН или наименование предприятия. Система найдет карточку в официальном реестре, определит первого лица, найдет сайт, соберет контакты и сгенерирует корпоративные адреса.</p>
+                            <p class="text-muted small">Введите ИНН (10 или 12 цифр), ОГРН или наименование предприятия. Платформа найдет карточку в реестре, определит состав руководства, найдет официальный домен, соберет контакты и рассчитает скоринг.</p>
 
                             <div class="input-group-search d-flex gap-2 mb-3">
                                 <i class="bi bi-search search-icon"></i>
-                                <input type="text" id="enrichQueryInput" class="form-control" placeholder="Например: 7707083893, 7736207543, Лаборатория Касперского, Балтика, Озон...">
+                                <input type="text" id="enrichQueryInput" class="form-control" placeholder="Например: 7707083893, 7736207543, Авито, МойСклад, ВкусВилл...">
                                 <button class="btn btn-primary px-4 fw-semibold d-flex align-items-center gap-2" id="btnEnrich" onclick="startSingleEnrichment()">
                                     <i class="bi bi-search"></i> <span>Найти</span>
                                 </button>
                             </div>
 
-                            <!-- Индикатор прогресса -->
                             <div id="enrichProgressArea" style="display: none;">
                                 <div class="progress mb-2" style="height: 8px;">
                                     <div class="progress-bar progress-bar-striped progress-bar-animated" id="enrichBar" style="width: 100%;"></div>
@@ -874,7 +1090,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </div>
                         </div>
 
-                        <!-- Карточка результата -->
                         <div id="enrichResultCard" class="card-custom" style="display: none;">
                             <h6 class="fw-bold text-success mb-3"><i class="bi bi-check-circle-fill me-2"></i> Результат обогащения</h6>
                             <div id="enrichResultContent"></div>
@@ -889,12 +1104,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="col-lg-6">
                         <div class="card-custom h-100">
                             <h5 class="fw-bold mb-2"><i class="bi bi-file-earmark-arrow-up-fill text-primary me-2"></i> Загрузка файла реестра</h5>
-                            <p class="text-muted small">Загрузите файл Excel (.xlsx) или CSV со списком ИНН организаций. Система автоматически распознает колонку с ИНН и запустит конвейер обогащения в фоновом режиме.</p>
+                            <p class="text-muted small">Загрузите реестр Excel (.xlsx, .xls) или CSV со списком ИНН организаций. Система автоматически найдет нужную колонку и запустит конвейер в фоне.</p>
 
                             <div class="dropzone-box" onclick="document.getElementById('fileUploadInput').click()">
                                 <i class="bi bi-cloud-arrow-up fs-1 text-primary mb-2 d-block"></i>
                                 <div class="fw-semibold">Нажмите для выбора файла или перетащите сюда</div>
-                                <div class="text-muted small mt-1">Поддерживаются .xlsx, .xls, .csv</div>
+                                <div class="text-muted small mt-1">Поддерживаются .xlsx, .xls, .csv до 10 000 строк</div>
                                 <input type="file" id="fileUploadInput" accept=".xlsx,.xls,.csv" style="display: none;" onchange="uploadBatchFile(this.files[0])">
                             </div>
                         </div>
@@ -904,19 +1119,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <div class="card-custom h-100">
                             <h5 class="fw-bold mb-2"><i class="bi bi-card-text text-warning me-2"></i> Ввод списка ИНН вручную</h5>
                             <p class="text-muted small">Вставьте список ИНН или сайтов (по одному на строку):</p>
-                            <textarea id="batchTextarea" class="form-control mb-3" rows="5" placeholder="7707083893&#10;7736207543&#10;7802849641&#10;7743003908&#10;3528000597"></textarea>
+                            <textarea id="batchTextarea" class="form-control mb-3 font-monospace" rows="5" placeholder="7707083893&#10;7736207543&#10;7802849641&#10;7743003908&#10;7710668322"></textarea>
                             <button class="btn btn-primary btn-action" onclick="startBatchFromText()">
                                 <i class="bi bi-play-fill"></i> Запустить пакетное обогащение
                             </button>
                         </div>
                     </div>
 
-                    <!-- Монитор активной задачи -->
                     <div class="col-12" id="batchMonitorCard" style="display: none;">
                         <div class="card-custom">
                             <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h6 class="fw-bold mb-0"><i class="bi bi-cpu-fill text-primary me-2"></i> Статус фонового конвейера</h6>
-                                <span class="badge bg-primary" id="batchBadgeStatus">В процессе</span>
+                                <h6 class="fw-bold mb-0"><i class="bi bi-cpu-fill text-primary me-2"></i> Фоновый конвейер обработки</h6>
+                                <div class="d-flex gap-2">
+                                    <span class="badge bg-primary" id="batchBadgeStatus">В процессе</span>
+                                    <button class="btn btn-sm btn-outline-danger" id="btnCancelBatch" onclick="cancelActiveBatch()">Отменить</button>
+                                </div>
                             </div>
                             <div class="progress mb-2" style="height: 12px; border-radius: 6px;">
                                 <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" id="batchProgressBar" style="width: 0%;"></div>
@@ -930,13 +1147,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Вкладка 5: Инструменты валидации -->
+            <!-- Вкладка 5: Инструменты валидации и Outreach -->
             <div class="tab-pane fade" id="toolsPane" role="tabpanel">
                 <div class="row g-4">
                     <!-- Генератор email -->
                     <div class="col-lg-6">
                         <div class="card-custom h-100">
-                            <h5 class="fw-bold mb-3"><i class="bi bi-envelope-at-fill text-primary me-2"></i> Генератор корпоративных email</h5>
+                            <h5 class="fw-bold mb-3"><i class="bi bi-envelope-at-fill text-primary me-2"></i> Генератор корпоративных email (20+ формул)</h5>
                             <div class="row g-2 mb-3">
                                 <div class="col-md-6">
                                     <label class="form-label small fw-semibold">ФИО сотрудника</label>
@@ -944,7 +1161,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label small fw-semibold">Корпоративный домен</label>
-                                    <input type="text" id="toolDomainInput" class="form-control" placeholder="company.ru" value="yandex.ru">
+                                    <input type="text" id="toolDomainInput" class="form-control" placeholder="company.ru" value="sberbank.ru">
                                 </div>
                             </div>
                             <button class="btn btn-primary btn-action mb-3" onclick="runEmailPermutations()">
@@ -954,27 +1171,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         </div>
                     </div>
 
-                    <!-- Валидатор контактов -->
+                    <!-- Валидатор контактов & Доставляемость -->
                     <div class="col-lg-6">
                         <div class="card-custom h-100">
-                            <h5 class="fw-bold mb-3"><i class="bi bi-shield-check text-success me-2"></i> Валидатор телефона и Email</h5>
+                            <h5 class="fw-bold mb-3"><i class="bi bi-shield-check text-success me-2"></i> Аудит домена, Email и Телефонов</h5>
                             
                             <div class="mb-3">
-                                <label class="form-label small fw-semibold">Проверка Email (DNS MX + Синтаксис)</label>
+                                <label class="form-label small fw-semibold">Аудит безопасности домена (MX, SPF, DMARC, DKIM)</label>
                                 <div class="input-group">
-                                    <input type="email" id="toolEmailInput" class="form-control" placeholder="pr@yandex-team.ru" value="pr@yandex-team.ru">
-                                    <button class="btn btn-outline-primary" onclick="runEmailValidation()">Проверить</button>
+                                    <input type="text" id="toolDeliverDomain" class="form-control" placeholder="yandex.ru" value="yandex.ru">
+                                    <button class="btn btn-outline-primary" onclick="runDeliverabilityAudit()">Аудит домена</button>
                                 </div>
-                                <div id="emailVerifyResult" class="mt-2 small"></div>
+                                <div id="deliverAuditResult" class="mt-2 small"></div>
                             </div>
 
                             <hr>
 
                             <div class="mb-3">
-                                <label class="form-label small fw-semibold">Проверка телефона (E.164 + Регион + Оператор)</label>
+                                <label class="form-label small fw-semibold">Проверка телефона (Часовой пояс + Окно звонка + Оператор)</label>
                                 <div class="input-group">
                                     <input type="text" id="toolPhoneInput" class="form-control" placeholder="+7 916 123 45 67" value="+7 (495) 739-70-00">
-                                    <button class="btn btn-outline-success" onclick="runPhoneValidation()">Проверить</button>
+                                    <button class="btn btn-outline-success" onclick="runPhoneValidation()">Проверить телефон</button>
                                 </div>
                                 <div id="phoneVerifyResult" class="mt-2 small"></div>
                             </div>
@@ -987,70 +1204,101 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     </div>
 
-    <!-- Модальное окно деталей лида и генератора холодного письма -->
+    <!-- Модальное окно деталей лида и генератора холодного письма / звонка -->
     <div class="modal fade" id="leadModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
+        <div class="modal-dialog modal-xl">
             <div class="modal-content border-0 shadow-lg" style="border-radius: 16px;">
                 <div class="modal-header border-bottom-0 pb-0">
-                    <h5 class="modal-title fw-bold" id="modalLeadTitle">Карточка ЛПР</h5>
+                    <div>
+                        <h5 class="modal-title fw-bold" id="modalLeadTitle">Досье ЛПР</h5>
+                        <small class="text-muted" id="modalCompanySub">Карточка предприятия и руководителя</small>
+                    </div>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="row g-3 mb-4">
-                        <div class="col-md-6">
-                            <label class="form-label small text-muted mb-1">ФИО руководителя</label>
-                            <input type="text" id="modalFio" class="form-control fw-bold">
+                    
+                    <ul class="nav nav-pills mb-3" id="modalTabs" role="tablist">
+                        <li class="nav-item"><button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tabLeadInfo">Контактные данные</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#tabOutreach">Cold Email Studio</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#tabCallScript">Сценарий звонка (Cold Call)</button></li>
+                    </ul>
+
+                    <div class="tab-content">
+                        <!-- Вкладка Контакт -->
+                        <div class="tab-pane fade show active" id="tabLeadInfo">
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label small text-muted mb-1">ФИО руководителя</label>
+                                    <input type="text" id="modalFio" class="form-control fw-bold">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small text-muted mb-1">Должность</label>
+                                    <input type="text" id="modalPost" class="form-control">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label small text-muted mb-1">Корпоративный Email</label>
+                                    <input type="text" id="modalEmail" class="form-control font-monospace">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label small text-muted mb-1">Телефон</label>
+                                    <input type="text" id="modalPhone" class="form-control font-monospace">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label small text-muted mb-1">Статус в CRM</label>
+                                    <select id="modalStatus" class="form-select">
+                                        <option value="NEW">Новый контакт (NEW)</option>
+                                        <option value="CONTACTED">Связались (CONTACTED)</option>
+                                        <option value="IN_PROGRESS">В работе (IN_PROGRESS)</option>
+                                        <option value="QUALIFIED">Квалифицирован (QUALIFIED)</option>
+                                        <option value="MEETING_SCHEDULED">Назначена встреча</option>
+                                        <option value="WON">Сделка (WON)</option>
+                                        <option value="REJECTED">Отказ (REJECTED)</option>
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small text-muted mb-1">Заметки и история взаимодействия</label>
+                                    <textarea id="modalNotes" class="form-control" rows="2" placeholder="Комментарии менеджера по продажам..."></textarea>
+                                </div>
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label small text-muted mb-1">Должность</label>
-                            <input type="text" id="modalPost" class="form-control">
+
+                        <!-- Вкладка Outreach Email -->
+                        <div class="tab-pane fade" id="tabOutreach">
+                            <div class="p-3 bg-light rounded-3 mb-3">
+                                <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                                    <span class="fw-bold text-dark small text-uppercase">
+                                        <i class="bi bi-envelope-paper-heart-fill text-primary me-1"></i>
+                                        Шаблоны B2B холодного письма
+                                    </span>
+                                    <div class="btn-group btn-group-sm">
+                                        <button class="btn btn-outline-primary" onclick="generateOutreach('partnership')">Партнерство</button>
+                                        <button class="btn btn-outline-primary" onclick="generateOutreach('sales')">Продажи</button>
+                                        <button class="btn btn-outline-primary" onclick="generateOutreach('demo')">Демо-доступ</button>
+                                        <button class="btn btn-outline-primary" onclick="generateOutreach('procurement')">Закупки</button>
+                                        <button class="btn btn-outline-primary" onclick="generateOutreach('substitution')">Импортозамещение</button>
+                                        <button class="btn btn-outline-secondary" onclick="generateOutreach('followup1')">Follow-up 1</button>
+                                    </div>
+                                </div>
+                                <div id="outreachSubject" class="fw-bold text-primary small mb-1"></div>
+                                <textarea id="outreachBody" class="form-control form-control-sm font-monospace" rows="8" readonly></textarea>
+                                <button class="btn btn-sm btn-outline-primary mt-2" onclick="copyOutreachText()">
+                                    <i class="bi bi-clipboard"></i> Скопировать текст письма
+                                </button>
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label small text-muted mb-1">Email</label>
-                            <input type="text" id="modalEmail" class="form-control">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label small text-muted mb-1">Телефон</label>
-                            <input type="text" id="modalPhone" class="form-control">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label small text-muted mb-1">Статус в CRM</label>
-                            <select id="modalStatus" class="form-select">
-                                <option value="NEW">Новый контакт (NEW)</option>
-                                <option value="CONTACTED">Связались (CONTACTED)</option>
-                                <option value="QUALIFIED">Квалифицирован (QUALIFIED)</option>
-                                <option value="CONVERTED">Сделка (CONVERTED)</option>
-                                <option value="REJECTED">Отказ (REJECTED)</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label small text-muted mb-1">Заметки / История контакта</label>
-                            <input type="text" id="modalNotes" class="form-control" placeholder="Комментарии менеджера...">
+
+                        <!-- Вкладка Сценарий звонка -->
+                        <div class="tab-pane fade" id="tabCallScript">
+                            <div class="p-3 bg-light rounded-3 mb-3" id="callScriptContainer">
+                                <div class="spinner-border spinner-border-sm text-primary"></div> Загрузка скрипта...
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Генератор холодного письма -->
-                    <div class="p-3 bg-light rounded-3 mb-3">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="fw-bold text-dark small text-uppercase">
-                                <i class="bi bi-envelope-paper-heart-fill text-primary me-1"></i>
-                                Генератор B2B холодного письма
-                            </span>
-                            <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-secondary" onclick="generateOutreach('partnership')">Партнерство</button>
-                                <button class="btn btn-outline-secondary" onclick="generateOutreach('sales')">Продажи</button>
-                                <button class="btn btn-outline-secondary" onclick="generateOutreach('demo')">Демо-доступ</button>
-                            </div>
-                        </div>
-                        <div id="outreachSubject" class="fw-bold text-primary small mb-1"></div>
-                        <textarea id="outreachBody" class="form-control form-control-sm font-monospace" rows="6" readonly></textarea>
-                        <button class="btn btn-sm btn-outline-primary mt-2" onclick="copyOutreachText()">
-                            <i class="bi bi-clipboard"></i> Скопировать текст письма
-                        </button>
-                    </div>
                 </div>
                 <div class="modal-footer border-top-0 pt-0">
                     <button type="button" class="btn btn-outline-danger btn-sm" onclick="deleteCurrentLead()">Удалить контакт</button>
+                    <a id="modalVcardBtn" href="#" class="btn btn-outline-info btn-sm"><i class="bi bi-person-vcard"></i> vCard</a>
                     <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Закрыть</button>
                     <button type="button" class="btn btn-primary btn-sm px-3" onclick="saveLeadChanges()">Сохранить изменения</button>
                 </div>
@@ -1058,7 +1306,66 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Уведомление о копировании -->
+    <!-- Модальное окно ручного добавления -->
+    <div class="modal fade" id="manualCreateModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content border-0 shadow-lg" style="border-radius: 16px;">
+                <div class="modal-header border-bottom-0 pb-0">
+                    <h5 class="modal-title fw-bold">Добавить организацию и ЛПР</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1">ИНН организации *</label>
+                        <input type="text" id="manualInn" class="form-control" placeholder="7707083893" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1">Наименование организации *</label>
+                        <input type="text" id="manualCompName" class="form-control" placeholder="ООО 'Пример'" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1">ФИО руководителя / ЛПР *</label>
+                        <input type="text" id="manualFio" class="form-control" placeholder="Иванов Иван Иванович" required>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Должность</label>
+                            <input type="text" id="manualTitle" class="form-control" placeholder="Генеральный директор" value="Генеральный директор">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Уровень</label>
+                            <select id="manualRole" class="form-select">
+                                <option value="C-Level">C-Level</option>
+                                <option value="Director">Director</option>
+                                <option value="Head">Head</option>
+                                <option value="Founder">Founder</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Email</label>
+                            <input type="email" id="manualEmail" class="form-control" placeholder="ceo@company.ru">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Телефон</label>
+                            <input type="text" id="manualPhone" class="form-control" placeholder="+7 999 123-45-67">
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small text-muted mb-1">Сайт</label>
+                        <input type="text" id="manualWebsite" class="form-control" placeholder="company.ru">
+                    </div>
+                </div>
+                <div class="modal-footer border-top-0 pt-0">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="button" class="btn btn-primary btn-sm px-4" onclick="submitManualLead()">Создать</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Уведомление о действиях -->
     <div id="copyToast" class="toast-copy">
         <i class="bi bi-clipboard-check text-success me-2"></i> Скопировано в буфер обмена
     </div>
@@ -1067,8 +1374,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <script>
         let allLeads = [];
+        let selectedLeadIds = new Set();
         let activeLeadId = null;
+        let activeBatchTaskId = null;
         let chartRolesInstance = null;
+        let chartCRMInstance = null;
         let chartRegionsInstance = null;
         let chartIndustriesInstance = null;
 
@@ -1080,7 +1390,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function showToast(msg) {
             const t = document.getElementById('copyToast');
-            t.innerHTML = `<i class="bi bi-clipboard-check text-success me-2"></i> ${msg}`;
+            t.innerHTML = `<i class="bi bi-check-circle-fill text-success me-2"></i> ${msg}`;
             t.style.display = 'block';
             setTimeout(() => { t.style.display = 'none'; }, 2200);
         }
@@ -1097,6 +1407,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const res = await fetch('/api/leads?page_size=300');
                 const data = await res.json();
                 allLeads = data.items || [];
+                selectedLeadIds.clear();
                 updateStats();
                 renderTable(allLeads);
             } catch (e) {
@@ -1124,7 +1435,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (leads.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="5" class="text-center py-5 text-muted">
+                        <td colspan="6" class="text-center py-5 text-muted">
                             <i class="bi bi-inbox fs-1 d-block mb-2 text-secondary"></i>
                             Контакты не найдены. Воспользуйтесь вкладкой «Поиск и Обогащение» для добавления.
                         </td>
@@ -1146,11 +1457,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     badgeClass = 'badge-valid_mx';
                     badgeIcon = 'bi-check2-circle';
                     statusText = 'MX активен';
+                } else if (l.email_status === 'catch_all') {
+                    badgeClass = 'badge-catch_all';
+                    badgeIcon = 'bi-envelope-exclamation';
+                    statusText = 'Catch-All';
                 } else if (l.email_status === 'generated') {
                     badgeClass = 'badge-generated';
                     badgeIcon = 'bi-gear';
                     statusText = 'Паттерн';
-                } else if (l.email_status === 'disposable' || l.email_status === 'no_mx') {
+                } else if (l.email_status === 'disposable' || l.email_status === 'no_mx' || l.email_status === 'syntax_invalid') {
                     badgeClass = 'badge-invalid';
                     badgeIcon = 'bi-x-circle';
                     statusText = 'Не валиден';
@@ -1169,22 +1484,42 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </div>
                 ` : '<span class="text-muted small">—</span>';
 
+                let phoneBadge = '';
+                if (l.phone_timezone) {
+                    phoneBadge = `<span class="badge bg-light text-dark border" style="font-size: 0.68rem;"><i class="bi bi-clock"></i> ${l.phone_timezone}</span>`;
+                }
+
                 const phoneHtml = l.dm_phone ? `
                     <div class="d-flex flex-column gap-1">
                         <div class="contact-pill text-nowrap" title="Кликните для копирования" onclick="copyToClipboard('${l.dm_phone}')">
                             <i class="bi bi-telephone text-success"></i> ${l.dm_phone}
                         </div>
-                        <small class="text-muted" style="font-size: 0.72rem;">${l.dm_phone_type === 'mobile' ? 'Прямой мобильный' : (l.dm_phone_type === '8800' ? 'Горячая линия' : 'Приемная / Офис')}</small>
+                        <div class="d-flex align-items-center gap-1 flex-wrap">
+                            <small class="text-muted" style="font-size: 0.72rem;">${l.phone_carrier || (l.dm_phone_type === 'mobile' ? 'Мобильный' : 'Офис')}</small>
+                            ${phoneBadge}
+                        </div>
                     </div>
                 ` : '<span class="text-muted small">—</span>';
 
+                const isChecked = selectedLeadIds.has(l.id) ? 'checked' : '';
+
+                let crmBadgeColor = 'bg-secondary';
+                if (l.lead_status === 'QUALIFIED') crmBadgeColor = 'bg-primary';
+                else if (l.lead_status === 'MEETING_SCHEDULED') crmBadgeColor = 'bg-info text-dark';
+                else if (l.lead_status === 'WON') crmBadgeColor = 'bg-success';
+                else if (l.lead_status === 'REJECTED') crmBadgeColor = 'bg-danger';
+
                 tbody.innerHTML += `
                     <tr>
+                        <td>
+                            <input type="checkbox" class="lead-checkbox" data-id="${l.id}" ${isChecked} onchange="toggleLeadSelect(${l.id}, this)">
+                        </td>
                         <td>
                             <div class="fw-bold text-dark mb-1">${l.company_name}</div>
                             <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
                                 <span class="badge bg-light text-dark border">ИНН: ${l.inn}</span>
                                 ${l.region ? `<span class="text-muted small"><i class="bi bi-geo-alt"></i> ${l.region}</span>` : ''}
+                                ${l.solvency_score ? `<span class="badge bg-success bg-opacity-10 text-success border-0" title="Надежность">${l.solvency_score}/100</span>` : ''}
                             </div>
                             ${l.okved_name ? `<div class="text-muted small text-truncate" style="max-width: 260px;" title="${l.okved_name}">${l.okved_name}</div>` : ''}
                         </td>
@@ -1194,7 +1529,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 <div>
                                     <div class="fw-semibold text-dark">${l.dm_full_name}</div>
                                     <div class="text-muted small">${l.dm_title || 'Руководитель'}</div>
-                                    <span class="badge bg-secondary bg-opacity-10 text-secondary" style="font-size: 0.7rem;">${l.dm_role_level || 'C-Level'}</span>
+                                    <div class="d-flex gap-1 mt-1">
+                                        <span class="badge bg-secondary bg-opacity-10 text-secondary" style="font-size: 0.7rem;">${l.dm_role_level || 'C-Level'}</span>
+                                        <span class="badge ${crmBadgeColor} badge-crm">${l.lead_status || 'NEW'}</span>
+                                    </div>
                                 </div>
                             </div>
                         </td>
@@ -1202,8 +1540,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <td>${phoneHtml}</td>
                         <td style="text-align: right;">
                             <div class="d-flex gap-1 justify-content-end">
-                                <button class="btn btn-sm btn-outline-primary btn-action" onclick="openLeadModal(${l.id})" title="Карточка ЛПР и холодное письмо">
-                                    <i class="bi bi-pencil-square"></i>
+                                <button class="btn btn-sm btn-outline-primary btn-action" onclick="openLeadModal(${l.id})" title="Досье ЛПР и генератор Outreach">
+                                    <i class="bi bi-person-lines-fill"></i>
                                 </button>
                                 ${l.website ? `<a href="https://${l.website}" target="_blank" class="btn btn-sm btn-outline-secondary btn-action" title="Сайт"><i class="bi bi-globe"></i></a>` : ''}
                             </div>
@@ -1211,13 +1549,69 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </tr>
                 `;
             });
+            updateBulkToolbar();
+        }
+
+        function toggleLeadSelect(id, cb) {
+            if (cb.checked) selectedLeadIds.add(id);
+            else selectedLeadIds.delete(id);
+            updateBulkToolbar();
+        }
+
+        function toggleSelectAll(masterCb) {
+            const cbs = document.querySelectorAll('.lead-checkbox');
+            cbs.forEach(cb => {
+                cb.checked = masterCb.checked;
+                const id = parseInt(cb.getAttribute('data-id'));
+                if (masterCb.checked) selectedLeadIds.add(id);
+                else selectedLeadIds.delete(id);
+            });
+            updateBulkToolbar();
+        }
+
+        function updateBulkToolbar() {
+            const bar = document.getElementById('bulkActionsBar');
+            const cnt = document.getElementById('bulkSelectedCount');
+            if (selectedLeadIds.size > 0) {
+                bar.style.setProperty('display', 'flex', 'important');
+                cnt.innerText = selectedLeadIds.size;
+            } else {
+                bar.style.setProperty('display', 'none', 'important');
+            }
+        }
+
+        async function applyBulkStatus() {
+            const status = document.getElementById('bulkStatusSelect').value;
+            const ids = Array.from(selectedLeadIds);
+            if (ids.length === 0) return;
+
+            await fetch('/api/leads/bulk-status', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ lead_ids: ids, status: status })
+            });
+            showToast(`Обновлен статус для ${ids.length} контактов`);
+            await loadLeads();
+        }
+
+        async function applyBulkDelete() {
+            const ids = Array.from(selectedLeadIds);
+            if (ids.length === 0 || !confirm(`Удалить ${ids.length} контактов?`)) return;
+
+            await fetch('/api/leads/bulk-delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ lead_ids: ids })
+            });
+            showToast(`Удалено ${ids.length} контактов`);
+            await loadLeads();
         }
 
         function applyFilters() {
             const q = document.getElementById('filterQuery').value.toLowerCase().trim();
             const region = document.getElementById('filterRegion').value.toLowerCase();
             const role = document.getElementById('filterRole').value;
-            const emailStatus = document.getElementById('filterEmailStatus').value;
+            const leadStatus = document.getElementById('filterLeadStatus').value;
 
             const filtered = allLeads.filter(l => {
                 if (q) {
@@ -1233,7 +1627,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
                 if (region && (!l.region || !l.region.toLowerCase().includes(region))) return false;
                 if (role && l.dm_role_level !== role) return false;
-                if (emailStatus && l.email_status !== emailStatus) return false;
+                if (leadStatus && l.lead_status !== leadStatus) return false;
                 return true;
             });
 
@@ -1244,7 +1638,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             document.getElementById('filterQuery').value = '';
             document.getElementById('filterRegion').value = '';
             document.getElementById('filterRole').value = '';
-            document.getElementById('filterEmailStatus').value = '';
+            document.getElementById('filterLeadStatus').value = '';
             renderTable(allLeads);
         }
 
@@ -1254,18 +1648,56 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const lead = await res.json();
 
             document.getElementById('modalLeadTitle').innerText = `${lead.company_name} — ${lead.dm_full_name}`;
+            document.getElementById('modalCompanySub').innerText = `ИНН: ${lead.inn} | Регион: ${lead.region || 'РФ'} | Скоринг: ${lead.confidence_score}%`;
             document.getElementById('modalFio').value = lead.dm_full_name || '';
             document.getElementById('modalPost').value = lead.dm_title || '';
             document.getElementById('modalEmail').value = lead.dm_email || '';
             document.getElementById('modalPhone').value = lead.dm_phone || '';
             document.getElementById('modalStatus').value = lead.lead_status || 'NEW';
             document.getElementById('modalNotes').value = lead.notes || '';
+            document.getElementById('modalVcardBtn').href = `/api/leads/${leadId}/vcard`;
 
-            // Генерируем драфт письма по умолчанию
             await generateOutreach('partnership');
+            await loadCallScript(leadId);
 
             const modal = new bootstrap.Modal(document.getElementById('leadModal'));
             modal.show();
+        }
+
+        function openManualCreateModal() {
+            const modal = new bootstrap.Modal(document.getElementById('manualCreateModal'));
+            modal.show();
+        }
+
+        async function submitManualLead() {
+            const inn = document.getElementById('manualInn').value.trim();
+            const comp = document.getElementById('manualCompName').value.trim();
+            const fio = document.getElementById('manualFio').value.trim();
+            if (!inn || !comp || !fio) {
+                alert('Пожалуйста, заполните обязательные поля: ИНН, Название, ФИО');
+                return;
+            }
+
+            const payload = {
+                inn: inn,
+                company_name: comp,
+                dm_full_name: fio,
+                dm_title: document.getElementById('manualTitle').value,
+                dm_role_level: document.getElementById('manualRole').value,
+                dm_email: document.getElementById('manualEmail').value,
+                dm_phone: document.getElementById('manualPhone').value,
+                website: document.getElementById('manualWebsite').value
+            };
+
+            await fetch('/api/leads/manual', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+
+            bootstrap.Modal.getInstance(document.getElementById('manualCreateModal')).hide();
+            showToast('Контакт успешно создан');
+            await loadLeads();
         }
 
         async function generateOutreach(offerType) {
@@ -1283,6 +1715,53 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             } catch (e) {
                 console.error(e);
+            }
+        }
+
+        async function loadCallScript(leadId) {
+            const cont = document.getElementById('callScriptContainer');
+            try {
+                const res = await fetch('/api/tools/call-script', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ lead_id: leadId })
+                });
+                const data = await res.json();
+                const s = data.script;
+
+                cont.innerHTML = `
+                    <div class="mb-3">
+                        <span class="badge bg-warning text-dark mb-1">1. Секретарский барьер (Gatekeeper bypass)</span>
+                        <div class="p-2 bg-white rounded border small">${s.gatekeeper_script}</div>
+                    </div>
+                    <div class="mb-3">
+                        <span class="badge bg-primary mb-1">2. Открытие разговора с ЛПР (30-сек Hook)</span>
+                        <div class="p-2 bg-white rounded border small">${s.intro_pitch}</div>
+                    </div>
+                    <div class="mb-3">
+                        <span class="badge bg-secondary mb-1">3. Отработка возражений</span>
+                        <div class="accordion" id="accObjections">
+                            ${s.objections.map((obj, i) => `
+                                <div class="accordion-item">
+                                    <h2 class="accordion-header">
+                                        <button class="accordion-button collapsed py-2 small" type="button" data-bs-toggle="collapse" data-bs-target="#obj${i}">
+                                            ${obj.objection}
+                                        </button>
+                                    </h2>
+                                    <div id="obj${i}" class="accordion-collapse collapse" data-bs-parent="#accObjections">
+                                        <div class="accordion-body small text-muted">${obj.answer}</div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    <div>
+                        <span class="badge bg-success mb-1">4. Закрытие на онлайн-встречу / Демо</span>
+                        <div class="p-2 bg-white rounded border small">${s.closing}</div>
+                    </div>
+                `;
+            } catch (e) {
+                cont.innerHTML = `<div class="text-danger small">Ошибка генерации сценария звонка</div>`;
             }
         }
 
@@ -1322,7 +1801,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         async function reverifyAll() {
-            showToast('Запущена повторная проверка MX DNS...');
+            showToast('Запущена проверка MX DNS...');
             const res = await fetch('/api/leads/reverify', { method: 'POST' });
             const d = await res.json();
             showToast(`Перепроверено записей: ${d.reverified_count}`);
@@ -1356,7 +1835,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     resCard.style.display = 'block';
                     resContent.innerHTML = `
                         <div class="fw-bold fs-5 text-dark mb-1">${data.company_name}</div>
-                        <div class="text-muted small mb-3">ИНН: <b>${data.inn}</b> | Домен: <b>${data.domain || 'Не указан'}</b> | Найдено ЛПР: <b>${data.dms_count}</b></div>
+                        <div class="text-muted small mb-3">ИНН: <b>${data.inn}</b> | Домен: <b>${data.domain || 'Не указан'}</b> | Надежность: <b>${data.solvency_score}/100 (${data.risk_level})</b></div>
                         <div class="list-group">
                             ${data.dms.map(dm => `
                                 <div class="list-group-item d-flex justify-content-between align-items-center">
@@ -1400,6 +1879,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const res = await fetch('/api/batch/upload', { method: 'POST', body: formData });
                 const data = await res.json();
                 if (data.task_id) {
+                    activeBatchTaskId = data.task_id;
                     trackBatchTask(data.task_id);
                 } else {
                     alert(data.detail || 'Ошибка загрузки');
@@ -1424,6 +1904,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             });
             const data = await res.json();
             if (data.task_id) {
+                activeBatchTaskId = data.task_id;
                 trackBatchTask(data.task_id);
             }
         }
@@ -1447,13 +1928,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 pPercent.innerText = `${status.progress_percent}%`;
                 pDetails.innerText = `Обработано: ${status.processed_items} из ${status.total_items} (Успешно: ${status.success_items}, Ошибок: ${status.failed_items})`;
 
-                if (status.status === 'completed' || status.status === 'failed') {
+                if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
                     clearInterval(interval);
-                    badge.innerText = status.status === 'completed' ? 'Завершено' : 'Ошибка';
+                    badge.innerText = status.status === 'completed' ? 'Завершено' : (status.status === 'cancelled' ? 'Отменено' : 'Ошибка');
                     badge.className = status.status === 'completed' ? 'badge bg-success' : 'badge bg-danger';
                     await loadLeads();
                 }
             }, 1200);
+        }
+
+        async function cancelActiveBatch() {
+            if (!activeBatchTaskId) return;
+            await fetch(`/api/batch/cancel/${activeBatchTaskId}`, { method: 'POST' });
+            showToast('Задача отменена');
         }
 
         // ====================================================================
@@ -1492,23 +1979,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             `;
         }
 
-        async function runEmailValidation() {
-            const em = document.getElementById('toolEmailInput').value;
-            const div = document.getElementById('emailVerifyResult');
-            div.innerHTML = '<div class="spinner-border spinner-border-sm text-primary"></div> Проверка...';
+        async function runDeliverabilityAudit() {
+            const dom = document.getElementById('toolDeliverDomain').value;
+            const div = document.getElementById('deliverAuditResult');
+            div.innerHTML = '<div class="spinner-border spinner-border-sm text-primary"></div> Проверка DNS записей...';
 
-            const res = await fetch('/api/tools/verify-email', {
+            const res = await fetch('/api/tools/deliverability', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ email: em, check_smtp: false })
+                body: JSON.stringify({ domain: dom })
             });
             const d = await res.json();
             const r = d.result;
 
+            if (!r.valid) {
+                div.innerHTML = `<div class="alert alert-danger py-2 mb-0">${r.error || 'Ошибка проверки'}</div>`;
+                return;
+            }
+
             div.innerHTML = `
-                <div class="alert ${r.is_valid ? 'alert-success' : 'alert-danger'} py-2 mb-0">
-                    <div><b>Статус:</b> ${r.status} (${r.reason})</div>
-                    <div><b>Корпоративный:</b> ${r.is_corporate ? 'Да' : 'Нет'} | <b>MX сервер:</b> ${r.mx_host || '—'}</div>
+                <div class="alert ${r.deliverability_score >= 70 ? 'alert-success' : 'alert-warning'} py-2 mb-0">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <b>Провайдер:</b> ${r.provider}
+                        <span class="badge bg-primary">Score: ${r.deliverability_score}/100</span>
+                    </div>
+                    <div><b>MX:</b> ${r.has_mx ? '✓ Настроен' : '✗ Отсутствует'} | <b>SPF:</b> ${r.has_spf ? r.spf_qualifier : '✗ Отсутствует'}</div>
+                    <div><b>DMARC:</b> ${r.has_dmarc ? r.dmarc_policy : '✗ Отсутствует'} | <b>DKIM:</b> ${r.has_dkim ? '✓ Настроен' : '—'}</div>
                 </div>
             `;
         }
@@ -1529,8 +2025,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (r.valid) {
                 div.innerHTML = `
                     <div class="alert alert-success py-2 mb-0">
-                        <div><b>E.164:</b> <code>${r.formatted}</code> | <b>Национальный:</b> <code>${r.national}</code></div>
-                        <div><b>Тип:</b> ${r.type} | <b>Регион:</b> ${r.region || 'РФ'} | <b>Оператор:</b> ${r.carrier || 'Определен'}</div>
+                        <div><b>E.164:</b> <code>${r.formatted}</code> | <b>Оператор:</b> ${r.carrier || 'Определен'}</div>
+                        <div><b>Регион:</b> ${r.region || 'РФ'} | <b>Пояс:</b> ${r.timezone || 'MSK'} (местное: ${r.local_time})</div>
+                        <div><b>Окно звонков:</b> ${r.is_calling_window ? '<span class="text-success fw-bold">✓ Рабочее время</span>' : '<span class="text-danger fw-bold">✗ Нерабочие часы</span>'}</div>
                     </div>
                 `;
             } else {
@@ -1557,13 +2054,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     labels: rolesLabels,
                     datasets: [{
                         data: rolesData,
-                        backgroundColor: ['#2563eb', '#6366f1', '#10b981', '#f59e0b', '#ec4899']
+                        backgroundColor: ['#2563eb', '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6']
                     }]
                 },
                 options: { responsive: true, maintainAspectRatio: false }
             });
 
-            // 2. Regions Chart
+            // 2. CRM Funnel Chart
+            const crmLabels = Object.keys(stats.crm_funnel || {});
+            const crmData = Object.values(stats.crm_funnel || {});
+
+            if (chartCRMInstance) chartCRMInstance.destroy();
+            const ctxCRM = document.getElementById('chartCRM').getContext('2d');
+            chartCRMInstance = new Chart(ctxCRM, {
+                type: 'bar',
+                data: {
+                    labels: crmLabels,
+                    datasets: [{
+                        label: 'Лидов в статусе',
+                        data: crmData,
+                        backgroundColor: '#6366f1'
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+
+            // 3. Regions Chart
             const regLabels = stats.top_regions.map(r => r.region);
             const regData = stats.top_regions.map(r => r.count);
 
@@ -1582,7 +2098,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 options: { responsive: true, maintainAspectRatio: false }
             });
 
-            // 3. Industries Chart
+            // 4. Industries Chart
             const indLabels = stats.top_industries.map(i => i.industry);
             const indData = stats.top_industries.map(i => i.count);
 
@@ -1606,7 +2122,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             });
         }
 
-        // Запуск при загрузке страницы
         loadLeads();
     </script>
 </body>
