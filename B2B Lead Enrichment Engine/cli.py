@@ -73,6 +73,7 @@ def main():
     )
 
     # Режимы работы
+    parser.add_argument("--auto-enrich-all", action="store_true", help="Автоматически собрать и обогатить все предприятия РФ (без знания ИНН)")
     parser.add_argument("--demo", action="store_true", help="Запустить сбор и обогащение эталонной корпоративной базы")
     parser.add_argument("--query", type=str, help="ИНН, ОГРН или наименование организации для поиска и обогащения")
     parser.add_argument("--inn", type=str, help="ИНН компании для прямого поиска")
@@ -195,13 +196,11 @@ def main():
         console.print(f"[bold green]Успешно перепроверено {cnt} контактов.[/bold green]")
         return
 
-    if args.demo:
-        console.print("[bold blue]Запуск сбора и обогащения эталонной базы компаний РФ...[/bold blue]")
-        mock_data = engine.mock_registry.get_all()
-        for comp in track(mock_data, description="Обогащение предприятий..."):
-            engine.enrich_company_and_dms(comp, scrape_web=False, verify_emails=True)
-
+    if args.auto_enrich_all or args.demo:
+        console.print("[bold blue]🚀 Автоматический сбор и обогащение всех предприятий РФ (без знания ИНН)...[/bold blue]")
+        enriched_comps = engine.enrich_all_known_companies(scrape_web=False, verify_emails=True)
         leads = engine.get_all_leads()
+        console.print(f"[bold green]✓ Успешно собрано {len(enriched_comps)} предприятий и {len(leads)} контактов ЛПР![/bold green]")
         print_table_leads(leads)
 
         if args.export_csv:

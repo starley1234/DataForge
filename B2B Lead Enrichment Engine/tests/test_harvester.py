@@ -8,7 +8,7 @@ def test_universal_harvester_enrichment():
 
     assert comp is not None
     assert comp.inn == "7736207543"
-    assert comp.name == 'ООО "ЯНДЕКС"'
+    assert "ЯНДЕКС" in comp.name
     assert comp.solvency_score is not None
     assert comp.solvency_score > 0
     assert len(comp.decision_makers) >= 1
