@@ -148,6 +148,9 @@ B2B Lead Enrichment Engine/
 
 ### 1. Установка зависимостей
 
+py -m venv .venv
+.venv\Scripts\activate
+
 ```bash
 cd "B2B Lead Enrichment Engine"
 pip install -r requirements.txt
