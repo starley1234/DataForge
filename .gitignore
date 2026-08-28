@@ -2,3 +2,5 @@
 ai_contacts/data/ai_contacts.csv
 /ai_contacts/data
 /ai_contacts/src/__pycache__
+ai_contacts/data/ai_contacts.csv
+ai_contacts/data/ai_contacts.db
