@@ -308,14 +308,28 @@ def enrich_real(inn: str = Query(..., description="ИНН, ОГРН или на�
     clean_inn = inn.strip()
     comp = engine.fetch_and_enrich(clean_inn, scrape_web=True, verify_emails=True)
     if comp:
+        leads = engine.get_all_leads(query=comp.inn)
         return {
             "status": "ok",
             "company_name": comp.name,
+            "short_name": comp.short_name,
             "inn": comp.inn,
+            "ogrn": comp.ogrn,
+            "kpp": comp.kpp,
             "domain": comp.domain or comp.website,
+            "website": comp.website,
+            "region": comp.region,
+            "city": comp.city,
+            "address": comp.address,
+            "okved": comp.okved,
+            "okved_name": comp.okved_name,
+            "revenue_rub": comp.revenue_rub,
+            "employees_count": comp.employees_count,
             "solvency_score": comp.solvency_score,
             "risk_level": comp.risk_level,
+            "tags": comp.tags,
             "dms_count": len(comp.decision_makers),
+            "leads": leads,
             "dms": [
                 {
                     "full_name": dm.full_name,
@@ -789,6 +803,84 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
+        .enrich-hero-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%);
+            border: 1px solid #bfdbfe;
+            border-radius: 20px;
+            padding: 24px 28px;
+            box-shadow: 0 10px 30px rgba(37, 99, 235, 0.08);
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        .enrich-hero-card::before {
+            content: '';
+            position: absolute;
+            top: -60px;
+            right: -60px;
+            width: 180px;
+            height: 180px;
+            background: radial-gradient(circle, rgba(37, 99, 235, 0.12) 0%, transparent 70%);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        .enrich-input-container {
+            position: relative;
+        }
+        .enrich-input-container .form-control {
+            border-radius: 14px 0 0 14px;
+            font-size: 1.05rem;
+            padding: 14px 18px;
+            border-color: #cbd5e1;
+        }
+        .enrich-input-container .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15);
+        }
+        .enrich-btn-gradient {
+            background: linear-gradient(135deg, #2563eb, #4f46e5);
+            border: none;
+            border-radius: 0 14px 14px 0;
+            padding: 12px 28px;
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #ffffff;
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
+        }
+        .enrich-btn-gradient:hover {
+            background: linear-gradient(135deg, #1d4ed8, #4338ca);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+            color: #ffffff;
+        }
+        .sample-chip {
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            border-radius: 20px;
+            padding: 5px 13px;
+            font-size: 0.83rem;
+            font-weight: 600;
+            color: #334155;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .sample-chip:hover {
+            background: #eff6ff;
+            border-color: #3b82f6;
+            color: #1d4ed8;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 10px rgba(37, 99, 235, 0.15);
+        }
+        .spin {
+            animation: spinAnim 1s linear infinite;
+        }
+        @keyframes spinAnim {
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -809,8 +901,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <small class="text-muted">Поиск, скоринг, обогащение и валидация контактов ЛПР предприятий РФ</small>
                     </div>
                 </div>
-                <div class="d-flex gap-2">
-                    <button class="btn btn-primary btn-action" onclick="openManualCreateModal()">
+                <div class="d-flex gap-2 align-items-center">
+                    <button class="btn btn-primary px-3 shadow-sm d-flex align-items-center gap-2 fw-bold enrich-btn-gradient" style="border-radius: 10px; font-size: 0.92rem; padding: 8px 16px;" onclick="focusQuickEnrichment()">
+                        <i class="bi bi-stars"></i> ✨ Обогатить данные
+                    </button>
+                    <button class="btn btn-outline-primary btn-action" onclick="openManualCreateModal()">
                         <i class="bi bi-plus-circle"></i> Добавить контакт
                     </button>
                     <div class="dropdown">
@@ -872,6 +967,73 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             <!-- Вкладка 1: CRM База контактов -->
             <div class="tab-pane fade show active" id="crmPane" role="tabpanel">
+
+                <!-- ГЛАВНЫЙ БЛОК БЫСТРОГО ОБОГАЩЕНИЯ В 1 КЛИК -->
+                <div class="enrich-hero-card" id="quickEnrichHeroCard">
+                    <div class="row align-items-center mb-3">
+                        <div class="col-lg-8">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <span class="badge bg-primary px-3 py-1 text-white rounded-pill shadow-sm"><i class="bi bi-lightning-charge-fill me-1"></i> 1-CLICK ENRICHMENT</span>
+                                <span class="text-muted small fw-medium">Официальный ЕГРЮЛ ФНС • Реестр МСП • Краулинг • Email Permutations • Phone Intel</span>
+                            </div>
+                            <h4 class="fw-bold mb-1 text-dark">Быстрое обогащение организации и поиск ЛПР</h4>
+                            <p class="text-secondary small mb-0">Введите ИНН организации (10 или 12 цифр), название компании или сайт. Нажмите <b>«Обогатить данные»</b> для автоматического сбора реквизитов, состава топ-менеджмента, корпоративной почты и скоринга надежности.</p>
+                        </div>
+                        <div class="col-lg-4 text-lg-end mt-3 mt-lg-0">
+                            <button class="btn btn-sm btn-outline-primary rounded-pill px-3 shadow-sm" onclick="applyRandomSample()">
+                                <i class="bi bi-shuffle me-1"></i> Случайный пример
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Поисковая строка и Главная Кнопка Обогащения -->
+                    <div class="enrich-input-container">
+                        <div class="input-group input-group-lg shadow-sm">
+                            <span class="input-group-text bg-white border-end-0 ps-3">
+                                <i class="bi bi-search text-primary fs-5"></i>
+                            </span>
+                            <input type="text" id="heroEnrichInput" class="form-control border-start-0 ps-2" placeholder="Введите ИНН (например, 7707083893), название компании (Яндекс, Авито) или сайт..." onkeypress="handleHeroEnrichKey(event)">
+                            <button class="btn btn-primary px-4 fw-bold d-flex align-items-center gap-2 enrich-btn-gradient" id="btnHeroEnrich" onclick="startHeroEnrichment()">
+                                <i class="bi bi-stars fs-5"></i> <span>Обогатить данные</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Быстрый выбор примеров в 1 клик -->
+                    <div class="d-flex flex-wrap align-items-center gap-2 mt-3 pt-1">
+                        <span class="text-muted small fw-semibold me-1"><i class="bi bi-cursor-fill text-primary"></i> Быстрый выбор:</span>
+                        <button class="sample-chip" onclick="applySample('7736207543')">🏢 Яндекс</button>
+                        <button class="sample-chip" onclick="applySample('7707083893')">🏦 Сбербанк</button>
+                        <button class="sample-chip" onclick="applySample('7704217370')">📦 Ozon</button>
+                        <button class="sample-chip" onclick="applySample('7734443270')">🥑 ВкусВилл</button>
+                        <button class="sample-chip" onclick="applySample('7710668322')">🛍️ Авито</button>
+                        <button class="sample-chip" onclick="applySample('7710140679')">💳 Т-Банк</button>
+                        <button class="sample-chip" onclick="applySample('7743003908')">🛡️ Касперский</button>
+                        <button class="sample-chip" onclick="applySample('7714595571')">💻 1С</button>
+                        <button class="sample-chip" onclick="applySample('3528000597')">🏗️ Северсталь</button>
+                        <button class="sample-chip" onclick="applySample('7802849641')">🍺 Балтика</button>
+                        <button class="sample-chip" onclick="applySample('7707329188')">☁️ МойСклад</button>
+                        <button class="sample-chip" onclick="applySample('7810138853')">🚚 Деловые Линии</button>
+                    </div>
+
+                    <!-- Индикатор прогресса -->
+                    <div id="heroEnrichProgress" class="mt-3 pt-2" style="display: none;">
+                        <div class="progress mb-2" style="height: 10px; border-radius: 6px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" id="heroEnrichBar" style="width: 100%;"></div>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div id="heroEnrichStatusText" class="text-primary small fw-semibold">
+                                <i class="bi bi-arrow-repeat spin me-1"></i> Запрос в ЕГРЮЛ ФНС РФ, краулинг сайта и генерация контактов...
+                            </div>
+                            <span class="badge bg-light text-muted border">Сбор live-данных</span>
+                        </div>
+                    </div>
+
+                    <!-- Карточка мгновенного результата обогащения -->
+                    <div id="heroEnrichResultCard" class="mt-3 p-3 rounded-3 border bg-white shadow-sm" style="display: none;">
+                        <div id="heroEnrichResultContent"></div>
+                    </div>
+                </div>
 
                 <!-- Карточки быстрой статистики -->
                 <div class="row g-3 mb-4">
@@ -1809,6 +1971,193 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         // ====================================================================
+        // БЫСТРОЕ ОБОГАЩЕНИЕ ДАННЫХ В 1 КЛИК (HERO WIDGET)
+        // ====================================================================
+        const SAMPLE_INNS = [
+            '7736207543', '7707083893', '7704217370', '7734443270',
+            '7710668322', '7710140679', '7743003908', '7714595571',
+            '3528000597', '7802849641', '7707329188', '7810138853'
+        ];
+
+        function applyRandomSample() {
+            const rand = SAMPLE_INNS[Math.floor(Math.random() * SAMPLE_INNS.length)];
+            applySample(rand);
+        }
+
+        function focusQuickEnrichment() {
+            const el = document.getElementById('heroEnrichInput');
+            if (el) {
+                const crmTab = document.getElementById('crm-tab');
+                if (crmTab) crmTab.click();
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.focus();
+            }
+        }
+
+        function handleHeroEnrichKey(event) {
+            if (event.key === 'Enter') {
+                startHeroEnrichment();
+            }
+        }
+
+        function applySample(query) {
+            const input = document.getElementById('heroEnrichInput');
+            if (input) {
+                input.value = query;
+                startHeroEnrichment();
+            }
+        }
+
+        async function startHeroEnrichment() {
+            const input = document.getElementById('heroEnrichInput');
+            const q = input.value.trim();
+            if (!q) { input.focus(); return; }
+
+            const btn = document.getElementById('btnHeroEnrich');
+            const pArea = document.getElementById('heroEnrichProgress');
+            const pText = document.getElementById('heroEnrichStatusText');
+            const resCard = document.getElementById('heroEnrichResultCard');
+            const resContent = document.getElementById('heroEnrichResultContent');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Обогащение...';
+            pArea.style.display = 'block';
+            resCard.style.display = 'none';
+
+            const stages = [
+                '🔍 Запрос в реестр ЕГРЮЛ/ЕГРИП ФНС РФ...',
+                '🌐 Краулинг корпоративного сайта и анализ структуры...',
+                '👥 Извлечение состава руководства и директоров...',
+                '✉️ Генерация корпоративных Email и проверка MX DNS...',
+                '📞 Определение операторов РФ, таймзоны и доступности...',
+                '📊 Расчет скоринга надежности (Solvency Score)...'
+            ];
+            let sIdx = 0;
+            pText.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i> ' + stages[0];
+            const timer = setInterval(() => {
+                sIdx = (sIdx + 1) % stages.length;
+                pText.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i> ' + stages[sIdx];
+            }, 500);
+
+            try {
+                const res = await fetch('/api/enrich/real?inn=' + encodeURIComponent(q), { method: 'POST' });
+                clearInterval(timer);
+                const data = await res.json();
+
+                if (data.status === 'ok') {
+                    resCard.style.display = 'block';
+
+                    const riskBadgeClass = data.risk_level === 'LOW' ? 'bg-success' : (data.risk_level === 'MEDIUM' ? 'bg-warning text-dark' : 'bg-danger');
+
+                    const leadsList = data.leads && data.leads.length > 0 ? data.leads : data.dms.map(d => ({
+                        id: null,
+                        dm_full_name: d.full_name,
+                        dm_title: d.title,
+                        dm_role_level: d.role_level,
+                        dm_email: d.email,
+                        email_status: d.email_status,
+                        dm_phone: d.phone,
+                        phone_timezone: d.phone_timezone,
+                        confidence_score: d.confidence
+                    }));
+
+                    let rowsHtml = '';
+                    for (const l of leadsList) {
+                        const emailBtn = l.dm_email ? '<button class="btn btn-link btn-sm p-0 text-muted" title="Копировать" onclick="copyToClipboard(\'' + l.dm_email + '\')"><i class="bi bi-clipboard"></i></button>' : '';
+                        const waBtn = l.dm_phone ? '<a href="https://wa.me/' + l.dm_phone.replace(/[^0-9]/g, '') + '" target="_blank" class="btn btn-link btn-sm p-0 text-success" title="WhatsApp"><i class="bi bi-whatsapp"></i></a>' : '';
+                        const actionBtns = l.id ? '<button class="btn btn-outline-primary btn-sm" title="Письмо ЛПР (8 шаблонов)" onclick="openOutreachForLead(' + l.id + ')"><i class="bi bi-envelope-fill"></i></button><button class="btn btn-outline-warning text-dark btn-sm ms-1" title="Скрипт звонка" onclick="openCallScriptForLead(' + l.id + ')"><i class="bi bi-telephone-fill"></i></button><a href="/api/leads/' + l.id + '/vcard" class="btn btn-outline-secondary btn-sm ms-1" title="Скачать vCard (.vcf)"><i class="bi bi-person-vcard"></i></a>' : '';
+
+                        rowsHtml += '<tr>' +
+                            '<td><div class="fw-bold text-dark">' + l.dm_full_name + '</div><span class="badge bg-light text-secondary border" style="font-size:0.72rem;">' + (l.dm_role_level || 'C-Level') + '</span></td>' +
+                            '<td class="small text-muted">' + (l.dm_title || 'Руководитель') + '</td>' +
+                            '<td><div class="d-flex align-items-center gap-1"><span class="font-monospace fw-semibold text-primary">' + (l.dm_email || '—') + '</span> ' + emailBtn + '</div><small class="badge bg-light text-dark border" style="font-size:0.7rem;">' + (l.email_status || 'valid_mx') + '</small></td>' +
+                            '<td><div class="d-flex align-items-center gap-1 font-monospace"><span>' + (l.dm_phone || '—') + '</span> ' + waBtn + '</div><small class="text-muted" style="font-size:0.72rem;">' + (l.phone_timezone || 'MSK') + '</small></td>' +
+                            '<td><span class="badge bg-success bg-opacity-10 text-success fw-bold">' + (l.confidence_score || 92) + '%</span></td>' +
+                            '<td class="text-end">' + actionBtns + '</td>' +
+                        '</tr>';
+                    }
+
+                    resContent.innerHTML = '<div class="d-flex flex-wrap justify-content-between align-items-center pb-3 border-bottom mb-3">' +
+                        '<div>' +
+                            '<div class="d-flex align-items-center gap-2">' +
+                                '<h5 class="fw-bold mb-0 text-dark">' + data.company_name + '</h5>' +
+                                '<span class="badge ' + riskBadgeClass + '">Надежность: ' + data.solvency_score + '/100 (' + data.risk_level + ')</span>' +
+                                '<span class="badge bg-light text-secondary border">ЕГРЮЛ ФНС РФ</span>' +
+                            '</div>' +
+                            '<div class="text-muted small mt-1">' +
+                                'ИНН: <b class="text-dark">' + data.inn + '</b> | ОГРН: ' + (data.ogrn || '—') + ' | ' +
+                                'Отрасль: ' + (data.okved_name || '—') + ' | ' +
+                                'Регион: ' + (data.region || data.city || 'РФ') + ' | ' +
+                                'Сайт: <a href="https://' + (data.domain || 'yandex.ru') + '" target="_blank" class="text-primary fw-semibold">' + (data.domain || '—') + '</a>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="d-flex gap-2 mt-2 mt-md-0">' +
+                            '<button class="btn btn-sm btn-outline-primary" onclick="filterTableByInn(\'' + data.inn + '\')"><i class="bi bi-funnel me-1"></i> Показать в таблице</button>' +
+                            '<a href="/api/export/excel" class="btn btn-sm btn-success text-white"><i class="bi bi-file-earmark-excel me-1"></i> Скачать Excel</a>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="mb-2 fw-semibold text-dark small d-flex justify-content-between align-items-center">' +
+                        '<span><i class="bi bi-person-lines-fill text-primary me-1"></i> Найденные лица, принимающие решения (ЛПР):</span>' +
+                        '<span class="badge bg-primary bg-opacity-10 text-primary">' + leadsList.length + ' контакта(ов)</span>' +
+                    '</div>' +
+                    '<div class="table-responsive">' +
+                        '<table class="table table-sm table-hover align-middle mb-0">' +
+                            '<thead class="table-light">' +
+                                '<tr>' +
+                                    '<th>ФИО ЛПР</th><th>Должность</th><th>Корпоративный Email</th><th>Телефон и таймзона</th><th>Скоринг</th><th class="text-end">Действия</th>' +
+                                '</tr>' +
+                            '</thead>' +
+                            '<tbody>' + rowsHtml + '</tbody>' +
+                        '</table>' +
+                    '</div>';
+
+                    showToast('Обогащено: ' + data.company_name);
+                    await loadLeads();
+                    await loadAnalytics();
+                } else {
+                    clearInterval(timer);
+                    resCard.style.display = 'block';
+                    resContent.innerHTML = '<div class="alert alert-danger d-flex align-items-center gap-2 mb-0"><i class="bi bi-exclamation-triangle-fill fs-5"></i><div>' + (data.message || 'Организация не найдена') + '</div></div>';
+                }
+            } catch (e) {
+                clearInterval(timer);
+                resCard.style.display = 'block';
+                resContent.innerHTML = '<div class="alert alert-danger d-flex align-items-center gap-2 mb-0"><i class="bi bi-x-circle-fill fs-5"></i><div>Ошибка сетевого запроса к серверу при обогащении</div></div>';
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-stars fs-5"></i> <span>Обогатить данные</span>';
+                pArea.style.display = 'none';
+            }
+        }
+
+        function filterTableByInn(inn) {
+            document.getElementById('filterQuery').value = inn;
+            filterLeads();
+            const tableEl = document.getElementById('leadsTableCard');
+            if (tableEl) tableEl.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function openOutreachForLead(leadId) {
+            openLeadModal(leadId).then(() => {
+                const triggerEl = document.querySelector('#modalTabs button[data-bs-target="#tabOutreach"]');
+                if (triggerEl) {
+                    const tab = new bootstrap.Tab(triggerEl);
+                    tab.show();
+                }
+            });
+        }
+
+        function openCallScriptForLead(leadId) {
+            openLeadModal(leadId).then(() => {
+                const triggerEl = document.querySelector('#modalTabs button[data-bs-target="#tabCallScript"]');
+                if (triggerEl) {
+                    const tab = new bootstrap.Tab(triggerEl);
+                    tab.show();
+                }
+            });
+        }
+
+        // ====================================================================
         // ОБОГАЩЕНИЕ ОДНОЙ ОРГАНИЗАЦИИ
         // ====================================================================
         async function startSingleEnrichment() {
@@ -2132,3 +2481,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def index():
     return HTMLResponse(content=HTML_TEMPLATE, status_code=200)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host=settings.HOST, port=settings.PORT)
+
