@@ -21,6 +21,7 @@ from core.exporter import (
     export_to_json, generate_outreach_email, generate_cold_calling_script
 )
 from core.batch_processor import BatchProcessor
+from core.nationwide_harvester import NationwideHarvester, RUSSIAN_REGIONS, RUSSIAN_INDUSTRIES
 from core.config import settings
 
 app = FastAPI(
@@ -42,6 +43,7 @@ app.add_middleware(
 
 engine = EnrichmentEngine()
 batch_processor = BatchProcessor(engine)
+nationwide_harvester = NationwideHarvester(engine=engine)
 
 
 # Middleware: тайминг выполнения запросов и request ID
@@ -476,6 +478,62 @@ def enrich_auto_all():
         "leads_count": len(leads),
         "leads": leads
     }
+
+
+# ============================================================================
+# NATIONWIDE LIVE HARVESTER ENDPOINTS
+# ============================================================================
+
+class NationwideStartReq(BaseModel):
+    region: Optional[str] = None
+    industry: Optional[str] = None
+    limit: int = 10000
+
+
+@app.get("/api/nationwide/status")
+def get_nationwide_status():
+    """Возвращает текущий статус и метрики непрерывного поиска по всей России."""
+    return nationwide_harvester.get_status()
+
+
+@app.post("/api/nationwide/start")
+def start_nationwide(req: NationwideStartReq):
+    """Запуск фонового непрерывного поиска по всем регионам и отраслям РФ."""
+    res = nationwide_harvester.start(region_code=req.region, industry_keyword=req.industry, max_limit=req.limit)
+    return {"status": "ok" if res else "already_running", "is_running": nationwide_harvester.is_running}
+
+
+@app.post("/api/nationwide/pause")
+def pause_nationwide():
+    """Приостановка фонового сборщика."""
+    nationwide_harvester.pause()
+    return {"status": "ok", "is_paused": True}
+
+
+@app.post("/api/nationwide/resume")
+def resume_nationwide():
+    """Возобновление фонового сборщика."""
+    nationwide_harvester.resume()
+    return {"status": "ok", "is_paused": False}
+
+
+@app.post("/api/nationwide/stop")
+def stop_nationwide():
+    """Остановка фонового сборщика."""
+    nationwide_harvester.stop()
+    return {"status": "ok", "is_running": False}
+
+
+@app.get("/api/nationwide/regions")
+def get_nationwide_regions():
+    """Список субъектов РФ для селектора."""
+    return RUSSIAN_REGIONS
+
+
+@app.get("/api/nationwide/industries")
+def get_nationwide_industries():
+    """Список ключевых отраслей экономики РФ."""
+    return RUSSIAN_INDUSTRIES
 
 
 # ============================================================================
@@ -920,6 +978,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="d-flex gap-2 align-items-center">
+                    <button class="btn btn-success px-3 shadow-sm d-flex align-items-center gap-2 fw-bold text-white" style="border-radius: 10px; font-size: 0.92rem; padding: 8px 16px; background: linear-gradient(135deg, #10b981, #059669); border:none;" onclick="switchToNationwideTab()">
+                        <i class="bi bi-broadcast"></i> 🚀 Поиск по всей РФ
+                    </button>
                     <button class="btn btn-primary px-3 shadow-sm d-flex align-items-center gap-2 fw-bold enrich-btn-gradient" style="border-radius: 10px; font-size: 0.92rem; padding: 8px 16px;" onclick="focusQuickEnrichment()">
                         <i class="bi bi-stars"></i> ✨ Обогатить данные
                     </button>
@@ -959,6 +1020,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </button>
             </li>
             <li class="nav-item" role="presentation">
+                <button class="nav-link" id="nationwide-tab" data-bs-toggle="tab" data-bs-target="#nationwidePane" type="button" role="tab" onclick="initNationwideTab()">
+                    <i class="bi bi-broadcast"></i> 🚀 Автопоиск по всей России
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
                 <button class="nav-link" id="analytics-tab" data-bs-toggle="tab" data-bs-target="#analyticsPane" type="button" role="tab" onclick="loadAnalytics()">
                     <i class="bi bi-bar-chart-line-fill"></i> Аналитика и KPI
                 </button>
@@ -985,6 +1051,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             <!-- Вкладка 1: CRM База контактов -->
             <div class="tab-pane fade show active" id="crmPane" role="tabpanel">
+
 
                 <!-- ГЛАВНЫЙ БЛОК БЫСТРОГО ОБОГАЩЕНИЯ В 1 КЛИК -->
                 <div class="enrich-hero-card" id="quickEnrichHeroCard">
@@ -1202,6 +1269,139 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     <td colspan="6" class="text-center py-5 text-muted">
                                         <div class="spinner-border text-primary spinner-border-sm me-2"></div>
                                         Загрузка контактов...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Вкладка: Автопоиск по всей России (Live Nationwide Harvester) -->
+            <div class="tab-pane fade" id="nationwidePane" role="tabpanel">
+                
+                <!-- Верхняя карточка управления поисковиком -->
+                <div class="enrich-hero-card mb-4" style="background: linear-gradient(135deg, #ffffff 0%, #ecfdf5 100%); border-color: #a7f3d0;">
+                    <div class="row align-items-center mb-3">
+                        <div class="col-lg-8">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <span class="badge bg-success px-3 py-1 text-white rounded-pill shadow-sm" id="badgeNationwideStatus">
+                                    <i class="bi bi-broadcast me-1"></i> ГОТОВ К ЗАПУСКУ
+                                </span>
+                                <span class="text-muted small fw-medium">89 регионов РФ • 13 секторов экономики • ЕГРЮЛ ФНС • HeadHunter • Email Permutations</span>
+                            </div>
+                            <h4 class="fw-bold mb-1 text-dark">Автоматический непрерывный поиск всех организаций России</h4>
+                            <p class="text-secondary small mb-0">Запустите одной кнопкой — система автоматически сканирует все 89 субъектов РФ, находит компании по отраслям, извлекает контакты руководителей (C-Level, директоров), проверяет корпоративную почту и телефоны с часовыми поясами в реальном времени.</p>
+                        </div>
+                        <div class="col-lg-4 text-lg-end mt-3 mt-lg-0 d-flex flex-wrap gap-2 justify-content-lg-end">
+                            <button class="btn btn-success px-4 py-2 fw-bold shadow d-flex align-items-center gap-2 text-white" id="btnStartNationwide" onclick="startNationwideHarvest()" style="border-radius: 12px; font-size: 1rem; background: linear-gradient(135deg, #10b981, #059669); border:none;">
+                                <i class="bi bi-play-circle-fill fs-5"></i> <span>Запустить автопоиск по РФ</span>
+                            </button>
+                            <button class="btn btn-outline-warning btn-action" id="btnPauseNationwide" onclick="pauseNationwideHarvest()" style="display: none; height: 44px;">
+                                <i class="bi bi-pause-circle-fill"></i> Пауза
+                            </button>
+                            <button class="btn btn-outline-danger btn-action" id="btnStopNationwide" onclick="stopNationwideHarvest()" style="display: none; height: 44px;">
+                                <i class="bi bi-stop-circle-fill"></i> Остановить
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Панель фильтров региона и отрасли -->
+                    <div class="row g-2 pt-2 border-top">
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold text-dark mb-1"><i class="bi bi-geo-alt-fill text-danger me-1"></i> Охват регионов РФ</label>
+                            <select id="selNationwideRegion" class="form-select filter-select">
+                                <option value="">🇷🇺 Вся Россия (все 89 субъектов)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold text-dark mb-1"><i class="bi bi-building-fill text-primary me-1"></i> Отрасль / Сектор экономики</label>
+                            <select id="selNationwideIndustry" class="form-select filter-select">
+                                <option value="">🏢 Все ключевые отрасли экономики</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold text-dark mb-1"><i class="bi bi-speedometer2 text-info me-1"></i> Целевой лимит организаций</label>
+                            <select id="selNationwideLimit" class="form-select filter-select">
+                                <option value="1000">1 000 предприятий</option>
+                                <option value="5000">5 000 предприятий</option>
+                                <option value="10000" selected>10 000 предприятий (максимум)</option>
+                                <option value="50000">50 000 предприятий (расширенный)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Карточки живых метрик сессии -->
+                <div class="row g-3 mb-4">
+                    <div class="col-xl-2 col-md-4 col-6">
+                        <div class="stat-card p-3">
+                            <div class="text-muted small fw-medium mb-1">Собрано за сессию</div>
+                            <div class="stat-number text-success" id="nwStatComps">0</div>
+                            <small class="text-secondary">организаций</small>
+                        </div>
+                    </div>
+                    <div class="col-xl-2 col-md-4 col-6">
+                        <div class="stat-card p-3">
+                            <div class="text-muted small fw-medium mb-1">Контактов ЛПР</div>
+                            <div class="stat-number text-primary" id="nwStatDMs">0</div>
+                            <small class="text-secondary">руководителей</small>
+                        </div>
+                    </div>
+                    <div class="col-xl-2 col-md-4 col-6">
+                        <div class="stat-card p-3">
+                            <div class="text-muted small fw-medium mb-1">Скорость сбора</div>
+                            <div class="stat-number text-info" id="nwStatSpeed">0</div>
+                            <small class="text-secondary">орг / мин</small>
+                        </div>
+                    </div>
+                    <div class="col-xl-3 col-md-6 col-12">
+                        <div class="stat-card p-3">
+                            <div class="text-muted small fw-medium mb-1">Текущий регион РФ</div>
+                            <div class="fw-bold text-dark text-truncate fs-5" id="nwCurrentRegion">г. Москва</div>
+                            <small class="text-success"><i class="bi bi-broadcast spin me-1"></i> сканирование реестра</small>
+                        </div>
+                    </div>
+                    <div class="col-xl-3 col-md-6 col-12">
+                        <div class="stat-card p-3">
+                            <div class="text-muted small fw-medium mb-1">Текущая отрасль</div>
+                            <div class="fw-bold text-dark text-truncate fs-5" id="nwCurrentIndustry">Информационные технологии</div>
+                            <small class="text-primary"><i class="bi bi-clock-history me-1"></i> Время работы: <span id="nwUptime">0</span> сек</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Лента результатов в реальном времени -->
+                <div class="card border-0 shadow-sm" style="border-radius: 16px; overflow: hidden;">
+                    <div class="card-header bg-white py-3 px-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-danger rounded-pill p-2"><i class="bi bi-record-circle-fill"></i> LIVE</span>
+                            <h6 class="fw-bold mb-0 text-dark">Поток найденных предприятий России в реальном времени</h6>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-primary" onclick="switchToCrmTab()"><i class="bi bi-people-fill me-1"></i> Открыть в CRM</button>
+                            <a href="/api/export/excel" class="btn btn-sm btn-success text-white"><i class="bi bi-file-earmark-excel me-1"></i> Скачать Excel</a>
+                            <a href="/api/export/amocrm" class="btn btn-sm btn-outline-warning text-dark"><i class="bi bi-cloud-arrow-up me-1"></i> amoCRM</a>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-custom mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width: 8%;">Время</th>
+                                    <th style="width: 25%;">Организация / Реквизиты</th>
+                                    <th style="width: 20%;">Регион и Отрасль</th>
+                                    <th style="width: 25%;">ЛПР (Руководитель)</th>
+                                    <th style="width: 14%;">Контакты</th>
+                                    <th style="width: 8%; text-align: right;">Скоринг</th>
+                                </tr>
+                            </thead>
+                            <tbody id="nwLiveTableBody">
+                                <tr>
+                                    <td colspan="6" class="text-center py-5 text-muted">
+                                        <i class="bi bi-broadcast fs-1 d-block mb-2 text-secondary"></i>
+                                        Нажмите зеленую кнопку <b>«Запустить автопоиск по РФ»</b> вверху, чтобы запустить непрерывное сканирование предприятий России.
                                     </td>
                                 </tr>
                             </tbody>
@@ -2557,6 +2757,217 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     indexAxis: 'y'
                 }
             });
+        }
+
+        // ====================================================================
+        // АВТОПОИСК ВСЕХ ОРГАНИЗАЦИЙ РОССИИ (NATIONWIDE HARVESTER)
+        // ====================================================================
+        let nwPollInterval = null;
+        let isNationwideMetaLoaded = false;
+
+        function switchToNationwideTab() {
+            const tabBtn = document.getElementById('nationwide-tab');
+            if (tabBtn) {
+                const tab = new bootstrap.Tab(tabBtn);
+                tab.show();
+                initNationwideTab();
+            }
+        }
+
+        function switchToCrmTab() {
+            const tabBtn = document.getElementById('crm-tab');
+            if (tabBtn) {
+                const tab = new bootstrap.Tab(tabBtn);
+                tab.show();
+                loadLeads();
+            }
+        }
+
+        async function initNationwideTab() {
+            if (!isNationwideMetaLoaded) {
+                await loadNationwideDropdowns();
+                isNationwideMetaLoaded = true;
+            }
+            await pollNationwideStatus();
+            if (!nwPollInterval) {
+                nwPollInterval = setInterval(pollNationwideStatus, 1500);
+            }
+        }
+
+        async function loadNationwideDropdowns() {
+            try {
+                const [rRes, iRes] = await Promise.all([
+                    fetch('/api/nationwide/regions'),
+                    fetch('/api/nationwide/industries')
+                ]);
+                const regions = await rRes.json();
+                const industries = await iRes.json();
+
+                const rSel = document.getElementById('selNationwideRegion');
+                regions.forEach(r => {
+                    const opt = document.createElement('option');
+                    opt.value = r.code;
+                    opt.innerText = `${r.name} (${r.tz})`;
+                    rSel.appendChild(opt);
+                });
+
+                const iSel = document.getElementById('selNationwideIndustry');
+                industries.forEach(ind => {
+                    const opt = document.createElement('option');
+                    opt.value = ind.name;
+                    opt.innerText = ind.name;
+                    iSel.appendChild(opt);
+                });
+            } catch (e) {
+                console.error("Error loading nationwide dropdowns:", e);
+            }
+        }
+
+        async function startNationwideHarvest() {
+            const region = document.getElementById('selNationwideRegion').value;
+            const industry = document.getElementById('selNationwideIndustry').value;
+            const limit = parseInt(document.getElementById('selNationwideLimit').value) || 10000;
+
+            const btnStart = document.getElementById('btnStartNationwide');
+            const btnPause = document.getElementById('btnPauseNationwide');
+            const btnStop = document.getElementById('btnStopNationwide');
+
+            btnStart.disabled = true;
+
+            try {
+                await fetch('/api/nationwide/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ region: region || null, industry: industry || null, limit: limit })
+                });
+
+                showToast('🚀 Автопоиск предприятий по всей России запущен!');
+                btnStart.style.display = 'none';
+                btnPause.style.display = 'inline-flex';
+                btnStop.style.display = 'inline-flex';
+
+                if (!nwPollInterval) {
+                    nwPollInterval = setInterval(pollNationwideStatus, 1000);
+                }
+            } catch (e) {
+                alert('Ошибка запуска автопоиска: ' + e);
+            } finally {
+                btnStart.disabled = false;
+            }
+        }
+
+        async function pauseNationwideHarvest() {
+            const btnPause = document.getElementById('btnPauseNationwide');
+            if (btnPause.innerText.includes('Пауза')) {
+                await fetch('/api/nationwide/pause', { method: 'POST' });
+                btnPause.innerHTML = '<i class="bi bi-play-circle-fill"></i> Продолжить';
+                btnPause.className = 'btn btn-outline-success btn-action';
+                showToast('Автопоиск приостановлен');
+            } else {
+                await fetch('/api/nationwide/resume', { method: 'POST' });
+                btnPause.innerHTML = '<i class="bi bi-pause-circle-fill"></i> Пауза';
+                btnPause.className = 'btn btn-outline-warning btn-action';
+                showToast('Автопоиск возобновлен');
+            }
+        }
+
+        async function stopNationwideHarvest() {
+            await fetch('/api/nationwide/stop', { method: 'POST' });
+            showToast('Автопоиск предприятий остановлен');
+
+            const btnStart = document.getElementById('btnStartNationwide');
+            const btnPause = document.getElementById('btnPauseNationwide');
+            const btnStop = document.getElementById('btnStopNationwide');
+
+            btnStart.style.display = 'inline-flex';
+            btnPause.style.display = 'none';
+            btnStop.style.display = 'none';
+
+            await loadLeads();
+            await pollNationwideStatus();
+        }
+
+        async function pollNationwideStatus() {
+            try {
+                const res = await fetch('/api/nationwide/status');
+                const s = await res.json();
+
+                const badge = document.getElementById('badgeNationwideStatus');
+                const btnStart = document.getElementById('btnStartNationwide');
+                const btnPause = document.getElementById('btnPauseNationwide');
+                const btnStop = document.getElementById('btnStopNationwide');
+
+                if (s.is_running && !s.is_paused) {
+                    badge.className = 'badge bg-success px-3 py-1 text-white rounded-pill shadow-sm';
+                    badge.innerHTML = '<i class="bi bi-broadcast spin me-1"></i> ИДЕТ СКАНИРОВАНИЕ РОССИИ';
+                    btnStart.style.display = 'none';
+                    btnPause.style.display = 'inline-flex';
+                    btnPause.innerHTML = '<i class="bi bi-pause-circle-fill"></i> Пауза';
+                    btnPause.className = 'btn btn-outline-warning btn-action';
+                    btnStop.style.display = 'inline-flex';
+                } else if (s.is_running && s.is_paused) {
+                    badge.className = 'badge bg-warning text-dark px-3 py-1 rounded-pill shadow-sm';
+                    badge.innerHTML = '<i class="bi bi-pause-circle me-1"></i> НА ПАУЗЕ';
+                    btnStart.style.display = 'none';
+                    btnPause.style.display = 'inline-flex';
+                    btnPause.innerHTML = '<i class="bi bi-play-circle-fill"></i> Продолжить';
+                    btnPause.className = 'btn btn-outline-success btn-action';
+                    btnStop.style.display = 'inline-flex';
+                } else {
+                    badge.className = 'badge bg-secondary px-3 py-1 text-white rounded-pill shadow-sm';
+                    badge.innerHTML = '<i class="bi bi-broadcast me-1"></i> ГОТОВ К ЗАПУСКУ';
+                    btnStart.style.display = 'inline-flex';
+                    btnPause.style.display = 'none';
+                    btnStop.style.display = 'none';
+                }
+
+                document.getElementById('nwStatComps').innerText = s.total_harvested_session || 0;
+                document.getElementById('nwStatDMs').innerText = s.total_dms_session || 0;
+                document.getElementById('nwStatSpeed').innerText = s.speed_per_minute || 0;
+                document.getElementById('nwCurrentRegion').innerText = s.current_region || 'г. Москва';
+                document.getElementById('nwCurrentIndustry').innerText = s.current_industry || 'Все отрасли';
+                document.getElementById('nwUptime').innerText = s.uptime_seconds || 0;
+
+                // Отрисовка живой таблицы
+                const tbody = document.getElementById('nwLiveTableBody');
+                if (s.recent_companies && s.recent_companies.length > 0) {
+                    tbody.innerHTML = '';
+                    s.recent_companies.forEach(c => {
+                        const dm = (c.dms && c.dms.length > 0) ? c.dms[0] : null;
+                        const dmName = dm ? dm.name : '—';
+                        const dmTitle = dm ? dm.title : 'Руководитель';
+                        const dmEmail = dm ? dm.email : '—';
+                        const dmPhone = dm ? dm.phone : '—';
+
+                        tbody.innerHTML += `
+                            <tr>
+                                <td class="text-muted small font-monospace">${c.timestamp || '—'}</td>
+                                <td>
+                                    <div class="fw-bold text-dark">${c.name}</div>
+                                    <small class="text-muted">ИНН: ${c.inn} | <a href="https://${c.website}" target="_blank" class="text-primary">${c.website}</a></small>
+                                </td>
+                                <td>
+                                    <div class="small fw-semibold text-dark">${c.region || 'РФ'}</div>
+                                    <small class="text-muted">${c.industry || 'B2B'}</small>
+                                </td>
+                                <td>
+                                    <div class="fw-semibold text-dark">${dmName}</div>
+                                    <small class="text-muted">${dmTitle}</small>
+                                </td>
+                                <td>
+                                    <div class="font-monospace small text-primary fw-semibold">${dmEmail}</div>
+                                    <div class="font-monospace small text-dark">${dmPhone}</div>
+                                </td>
+                                <td class="text-end">
+                                    <span class="badge bg-success bg-opacity-10 text-success fw-bold">${c.solvency_score || 85}%</span>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                }
+            } catch (e) {
+                console.debug("Poll status error:", e);
+            }
         }
 
         loadLeads();

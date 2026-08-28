@@ -17,6 +17,7 @@ from core.exporter import (
     export_to_bitrix24_csv, export_to_hubspot_csv, export_to_vcard,
     generate_outreach_email, generate_cold_calling_script
 )
+from core.nationwide_harvester import NationwideHarvester
 from core.batch_processor import BatchProcessor
 from core.config import settings
 
@@ -73,7 +74,11 @@ def main():
     )
 
     # Режимы работы
-    parser.add_argument("--auto-enrich-all", action="store_true", help="Автоматически собрать и обогатить все предприятия РФ (без знания ИНН)")
+    parser.add_argument("--harvest-all-russia", "--nationwide", action="store_true", help="Запустить непрерывный автопоиск всех организаций России (89 регионов)")
+    parser.add_argument("--limit", type=int, default=10000, help="Лимит организаций для сбора")
+    parser.add_argument("--region", type=str, default=None, help="Фильтр региона (например: Москва, Свердловская, Татарстан)")
+    parser.add_argument("--industry", type=str, default=None, help="Фильтр отрасли (например: ИТ, Торговля, Строительство, Банки)")
+    parser.add_argument("--auto-enrich-all", action="store_true", help="Автоматически собрать и обогатить предприятия РФ (без знания ИНН)")
     parser.add_argument("--demo", action="store_true", help="Запустить сбор и обогащение эталонной корпоративной базы")
     parser.add_argument("--query", type=str, help="ИНН, ОГРН или наименование организации для поиска и обогащения")
     parser.add_argument("--inn", type=str, help="ИНН компании для прямого поиска")
@@ -194,6 +199,42 @@ def main():
         console.print("[bold yellow]Запуск повторной MX-проверки всех email в базе...[/bold yellow]")
         cnt = engine.reverify_all_emails()
         console.print(f"[bold green]Успешно перепроверено {cnt} контактов.[/bold green]")
+        return
+
+    if args.harvest_all_russia:
+        import time
+        from rich.live import Live
+        from mass_harvester import create_status_layout
+
+        harvester = NationwideHarvester(engine=engine)
+        console.print(Panel(
+            f"[bold green]Запуск автопоиска предприятий по всей России![/bold green]\n"
+            f"Охват: [bold cyan]89 регионов РФ[/bold cyan] | [bold magenta]13 ключевых отраслей экономики[/bold magenta]\n"
+            f"Режим: [bold yellow]Непрерывный фоновый сбор с верификацией контактов и скорингом[/bold yellow]\n\n"
+            f"Для остановки и выгрузки нажмите [bold red]Ctrl+C[/bold red]",
+            title="[bold blue]DataForge Nationwide Engine[/bold blue]"
+        ))
+
+        harvester.start(region_code=args.region, industry_keyword=args.industry, max_limit=args.limit)
+
+        try:
+            with Live(console=console, screen=True, refresh_per_second=4) as live:
+                while harvester.is_running:
+                    stats = harvester.get_status()
+                    db_stats = engine.get_dashboard_stats()
+                    layout = create_status_layout(stats, db_stats["total_dms"], db_stats["total_companies"])
+                    live.update(layout)
+                    time.sleep(0.25)
+        except KeyboardInterrupt:
+            harvester.stop()
+            console.print("\n[bold yellow]Остановка сборщика... Сохранение базы...[/bold yellow]")
+
+        leads = engine.get_all_leads()
+        if args.export_excel:
+            export_to_excel(leads, args.export_excel)
+            console.print(f"\n[bold green]✓ База экспортирована в {args.export_excel} ({len(leads)} лидов)![/bold green]")
+        if args.export_csv:
+            export_to_csv(leads, args.export_csv)
         return
 
     if args.auto_enrich_all or args.demo:
