@@ -27,6 +27,8 @@ from core.scraper import WebsiteScraper
 from core.engine import EnrichmentEngine
 from core.harvester import UniversalB2BHarvester
 from core.batch_processor import BatchProcessor
+from core.nationwide_harvester import NationwideHarvester
+from core.counterparty_intelligence import CounterpartyIntelligenceEngine
 from core.exporter import (
     export_to_excel, export_to_csv, export_to_amocrm_csv,
     export_to_bitrix24_csv, export_to_hubspot_csv, export_to_vcard,
@@ -68,6 +70,8 @@ __all__ = [
     "WebsiteScraper",
     "EnrichmentEngine",
     "UniversalB2BHarvester",
+    "NationwideHarvester",
+    "CounterpartyIntelligenceEngine",
     "BatchProcessor",
     "export_to_excel",
     "export_to_csv",

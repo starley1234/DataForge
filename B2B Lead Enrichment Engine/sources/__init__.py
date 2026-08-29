@@ -7,6 +7,7 @@ from sources.msp_registry import MSPRegistryClient
 from sources.tech_stack import TechStackDetector
 from sources.financial_scoring import FinancialScoringEngine
 from sources.company_registry import CompanyRegistry
+from sources.rusprofile_sources import CounterpartyDataAggregator
 
 __all__ = [
     "FNSEgrulClient",
@@ -14,5 +15,7 @@ __all__ = [
     "MSPRegistryClient",
     "TechStackDetector",
     "FinancialScoringEngine",
-    "CompanyRegistry"
+    "CompanyRegistry",
+    "CounterpartyDataAggregator"
 ]
+

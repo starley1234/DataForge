@@ -22,6 +22,7 @@ from core.exporter import (
 )
 from core.batch_processor import BatchProcessor
 from core.nationwide_harvester import NationwideHarvester, RUSSIAN_REGIONS, RUSSIAN_INDUSTRIES
+from core.counterparty_intelligence import CounterpartyIntelligenceEngine
 from core.config import settings
 
 app = FastAPI(
@@ -44,6 +45,7 @@ app.add_middleware(
 engine = EnrichmentEngine()
 batch_processor = BatchProcessor(engine)
 nationwide_harvester = NationwideHarvester(engine=engine)
+counterparty_engine = CounterpartyIntelligenceEngine(engine=engine)
 
 
 # Middleware: тайминг выполнения запросов и request ID
@@ -478,6 +480,56 @@ def enrich_auto_all():
         "leads_count": len(leads),
         "leads": leads
     }
+
+
+# ============================================================================
+# RUSPROFILE-STYLE COUNTERPARTY INTELLIGENCE ENDPOINTS (360° DUE DILIGENCE)
+# ============================================================================
+
+@app.get("/api/counterparty/dossier/{query}")
+def get_counterparty_dossier(query: str):
+    """
+    Возвращает полное досье контрагента из более чем 38 открытых государственных источников:
+    - ЕГРЮЛ/ЕГРИП (ФНС): реквизиты, статус, адрес, массовость, ОКВЭД, уставный капитал
+    - ГИР БО (ФНС): бухгалтерская отчетность, выручка, прибыль, активы, налоги, задолженности, блокировки счетов
+    - ЕИС Закупки: 44-ФЗ, 223-ФЗ, выигранные контракты, заказчики, проверка в РНП ФАС
+    - Картотека арбитражных дел (КАД): судебные иски в роли истца и ответчика
+    - ФССП: активные исполнительные производства, долги, ст. 46
+    - Руководство и Учредители: доли владения, проверка дисквалификации и массовости
+    - Аффилированность и связи: связанные компании через топ-менеджмент
+    - Проверки Генпрокуратуры (ЕРКНМ), Лицензии и Товарные знаки Роспатента
+    - Светофор благонадежности (Reliability Score 0-100) и матрица рисков
+    """
+    dossier = counterparty_engine.get_full_dossier(query)
+    if not dossier:
+        raise HTTPException(status_code=404, detail=f"Организация '{query}' не найдена в реестрах")
+    return dossier
+
+
+@app.get("/api/counterparty/export-excel/{query}")
+def export_counterparty_excel(query: str):
+    """Выгружает официальный отчет о проверке контрагента и должной осмотрительности в Excel (.xlsx)."""
+    dossier = counterparty_engine.get_full_dossier(query)
+    if not dossier:
+        raise HTTPException(status_code=404, detail="Организация не найдена")
+    
+    clean_inn = dossier["summary"]["inn"]
+    path = os.path.join(tempfile.gettempdir(), f"due_diligence_{clean_inn}.xlsx")
+    counterparty_engine.export_due_diligence_excel(dossier, path)
+    return FileResponse(
+        path,
+        filename=f"dossier_{clean_inn}_{dossier['summary']['short_name']}.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+@app.get("/api/counterparty/report-markdown/{query}", response_class=PlainTextResponse)
+def get_counterparty_report_markdown(query: str):
+    """Возвращает официальное заключение о проверке контрагента в формате Markdown."""
+    dossier = counterparty_engine.get_full_dossier(query)
+    if not dossier:
+        raise HTTPException(status_code=404, detail="Организация не найдена")
+    return counterparty_engine.generate_due_diligence_report_md(dossier)
 
 
 # ============================================================================
@@ -1020,6 +1072,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </button>
             </li>
             <li class="nav-item" role="presentation">
+                <button class="nav-link" id="counterparty-tab" data-bs-toggle="tab" data-bs-target="#counterpartyPane" type="button" role="tab">
+                    <i class="bi bi-shield-check"></i> 🛡️ Проверка контрагентов (Rusprofile 360°)
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
                 <button class="nav-link" id="nationwide-tab" data-bs-toggle="tab" data-bs-target="#nationwidePane" type="button" role="tab" onclick="initNationwideTab()">
                     <i class="bi bi-broadcast"></i> 🚀 Автопоиск по всей России
                 </button>
@@ -1274,6 +1331,71 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </tbody>
                         </table>
                     </div>
+                </div>
+
+            </div>
+
+            <!-- Вкладка: Проверка контрагентов Rusprofile 360° (Due Diligence) -->
+            <div class="tab-pane fade" id="counterpartyPane" role="tabpanel">
+                
+                <!-- Верхняя поисковая карточка Rusprofile -->
+                <div class="enrich-hero-card mb-4" style="background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-color: #cbd5e1;">
+                    <div class="row align-items-center mb-3">
+                        <div class="col-lg-8">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <span class="badge bg-primary px-3 py-1 text-white rounded-pill shadow-sm">
+                                    <i class="bi bi-shield-check me-1"></i> RUSPROFILE 360° DUE DILIGENCE
+                                </span>
+                                <span class="text-muted small fw-medium">38 государственных реестров РФ • ФНС ГИР БО • ЕИС Закупки • КАД Суды • ФССП • РНП</span>
+                            </div>
+                            <h4 class="fw-bold mb-1 text-dark">Комплексная проверка контрагентов и должная осмотрительность</h4>
+                            <p class="text-secondary small mb-0">Полный аудит надежности контрагента по методикам ФНС РФ (ст. 54.1 НК РФ). Бухгалтерская отчетность, налоговые долги, арбитражная практика, исполнительные производства, бенефициары и матрица рисков в одном окне.</p>
+                        </div>
+                    </div>
+
+                    <!-- Поисковая строка -->
+                    <div class="enrich-input-container">
+                        <div class="input-group input-group-lg shadow-sm">
+                            <span class="input-group-text bg-white border-end-0 ps-3">
+                                <i class="bi bi-shield-lock-fill text-primary fs-5"></i>
+                            </span>
+                            <input type="text" id="counterpartySearchInput" class="form-control border-start-0 ps-2" placeholder="Введите ИНН (например, 7707083893), ОГРН или название предприятия..." onkeypress="handleCounterpartyKey(event)">
+                            <button class="btn btn-primary px-4 fw-bold d-flex align-items-center gap-2 enrich-btn-gradient" id="btnCounterpartySearch" onclick="startCounterpartySearch()">
+                                <i class="bi bi-search fs-5"></i> <span>Проверить контрагента</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Быстрые примеры -->
+                    <div class="d-flex flex-wrap align-items-center gap-2 mt-3 pt-1">
+                        <span class="text-muted small fw-semibold me-1"><i class="bi bi-lightning-charge text-warning"></i> Проверить в 1 клик:</span>
+                        <button class="sample-chip" onclick="applyCpSample('7707083893')">🏦 Сбербанк</button>
+                        <button class="sample-chip" onclick="applyCpSample('7736207543')">🏢 Яндекс</button>
+                        <button class="sample-chip" onclick="applyCpSample('7704217370')">📦 Ozon</button>
+                        <button class="sample-chip" onclick="applyCpSample('7710668322')">🛍️ Авито</button>
+                        <button class="sample-chip" onclick="applyCpSample('7734443270')">🥑 ВкусВилл</button>
+                        <button class="sample-chip" onclick="applyCpSample('3528000597')">🏗️ Северсталь</button>
+                        <button class="sample-chip" onclick="applyCpSample('7802849641')">🍺 Балтика</button>
+                        <button class="sample-chip" onclick="applyCpSample('7743003908')">🛡️ Касперский</button>
+                    </div>
+
+                    <!-- Индикатор загрузки досье -->
+                    <div id="cpProgressArea" class="mt-3 pt-2" style="display: none;">
+                        <div class="progress mb-2" style="height: 10px; border-radius: 6px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%;"></div>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="text-primary small fw-semibold" id="cpStatusText">
+                                <i class="bi bi-arrow-repeat spin me-1"></i> Сбор сведений из ЕГРЮЛ, ГИР БО, ЕИС Закупки, КАД и ФССП...
+                            </div>
+                            <span class="badge bg-light text-muted border">38 источников РФ</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Контейнер карточки проверки контрагента Rusprofile -->
+                <div id="counterpartyDossierContainer" style="display: none;">
+                    <div id="counterpartyDossierContent"></div>
                 </div>
 
             </div>
@@ -2967,6 +3089,510 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             } catch (e) {
                 console.debug("Poll status error:", e);
+            }
+        }
+
+        // ====================================================================
+        // РАСШИРЕННАЯ ПРОВЕРКА КОНТРАГЕНТОВ (RUSPROFILE 360° DUE DILIGENCE)
+        // ====================================================================
+        function handleCounterpartyKey(event) {
+            if (event.key === 'Enter') {
+                startCounterpartySearch();
+            }
+        }
+
+        function applyCpSample(inn) {
+            const input = document.getElementById('counterpartySearchInput');
+            if (input) {
+                input.value = inn;
+                startCounterpartySearch();
+            }
+        }
+
+        function formatCurrencyRub(val) {
+            if (val === null || val === undefined) return '0 ₽';
+            return new Intl.NumberFormat('ru-RU').format(Math.round(val)) + ' ₽';
+        }
+
+        async function startCounterpartySearch() {
+            const input = document.getElementById('counterpartySearchInput');
+            const q = input.value.trim();
+            if (!q) { input.focus(); return; }
+
+            const btn = document.getElementById('btnCounterpartySearch');
+            const pArea = document.getElementById('cpProgressArea');
+            const pText = document.getElementById('cpStatusText');
+            const container = document.getElementById('counterpartyDossierContainer');
+            const content = document.getElementById('counterpartyDossierContent');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Запрос в 38 реестров...';
+            pArea.style.display = 'block';
+            container.style.display = 'none';
+
+            const stages = [
+                '🏢 ЕГРЮЛ/ЕГРИП ФНС РФ: проверка статуса, адреса и руководства...',
+                '📊 ГИР БО ФНС РФ: бухгалтерская отчетность, выручка, прибыль и налоги...',
+                '⚖️ Картотека арбитражных дел (КАД): анализ судебных исков и претензий...',
+                '🏛️ ФССП РФ: проверка активных долгов и исполнительных производств...',
+                '📦 ЕИС Закупки: реестр контрактов по 44-ФЗ/223-ФЗ и проверка в РНП ФАС...',
+                '🛡️ Расчет скоринга благонадежности Rusprofile и матрицы рисков...'
+            ];
+            let sIdx = 0;
+            pText.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i> ' + stages[0];
+            const timer = setInterval(() => {
+                sIdx = (sIdx + 1) % stages.length;
+                pText.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i> ' + stages[sIdx];
+            }, 450);
+
+            try {
+                const res = await fetch('/api/counterparty/dossier/' + encodeURIComponent(q));
+                clearInterval(timer);
+                if (!res.ok) {
+                    const err = await res.json();
+                    container.style.display = 'block';
+                    content.innerHTML = '<div class="alert alert-danger d-flex align-items-center gap-2"><i class="bi bi-exclamation-triangle-fill fs-4"></i><div>' + (err.detail || 'Организация не найдена') + '</div></div>';
+                    return;
+                }
+
+                const d = await res.json();
+                renderCounterpartyDossier(d);
+                container.style.display = 'block';
+                showToast('Досье получено: ' + d.summary.short_name);
+            } catch (e) {
+                clearInterval(timer);
+                container.style.display = 'block';
+                content.innerHTML = '<div class="alert alert-danger d-flex align-items-center gap-2"><i class="bi bi-x-circle-fill fs-4"></i><div>Ошибка связи с сервером при получении досье</div></div>';
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-search fs-5"></i> <span>Проверить контрагента</span>';
+                pArea.style.display = 'none';
+            }
+        }
+
+        function renderCounterpartyDossier(d) {
+            const content = document.getElementById('counterpartyDossierContent');
+            const sum = d.summary || {};
+            const fin = d.finance || {};
+            const proc = d.procurement || {};
+            const arb = d.courts || d.arbitration || {};
+            const fssp = d.fssp || {};
+            const rf = d.risk_factors || d.risk_matrix || {};
+            const lead = d.leadership || {};
+            const leads = d.leads || [];
+
+            // Score Banner
+            const score = sum.reliability_score || rf.score || 85;
+            let bannerClass = 'bg-success text-white';
+            let scoreTitle = 'ВЫСОКАЯ БЛАГОНАДЕЖНОСТЬ';
+            let scoreDesc = 'Организация обладает высокими показателями финансовой устойчивости. Признаки фирмы-однодневки отсутствуют. Рекомендуется к сотрудничеству.';
+
+            if (score < 50) {
+                bannerClass = 'bg-danger text-white';
+                scoreTitle = 'ВЫСОКИЙ РИСК НЕБЛАГОНАДЕЖНОСТИ';
+                scoreDesc = 'Критические стоп-факторы: задолженность, блокировка счетов или ликвидация. Сотрудничество не рекомендуется без финансового обеспечения.';
+            } else if (score < 75) {
+                bannerClass = 'bg-warning text-dark';
+                scoreTitle = 'УМЕРЕННАЯ БЛАГОНАДЕЖНОСТЬ (ТРЕБУЕТСЯ ВНИМАНИЕ)';
+                scoreDesc = 'Выявлены отдельные факторы риска (судебные иски или задолженность). Рекомендуется работа по предоплате или факторингу.';
+            }
+
+            // Positive markers
+            let posHtml = '';
+            (rf.positive || rf.positive_markers || []).forEach(m => {
+                posHtml += `<div class="d-flex align-items-start gap-2 mb-2"><i class="bi bi-check-circle-fill text-success fs-6 mt-1"></i><span class="small">${m}</span></div>`;
+            });
+
+            // Warning markers
+            let warnHtml = '';
+            (rf.warnings || rf.warning_markers || []).forEach(m => {
+                warnHtml += `<div class="d-flex align-items-start gap-2 mb-2"><i class="bi bi-exclamation-circle-fill text-warning fs-6 mt-1"></i><span class="small">${m}</span></div>`;
+            });
+
+            // Negative markers
+            let negHtml = '';
+            (rf.critical || rf.negative_markers || []).forEach(m => {
+                negHtml += `<div class="d-flex align-items-start gap-2 mb-2"><i class="bi bi-x-octagon-fill text-danger fs-6 mt-1"></i><span class="small fw-semibold">${m}</span></div>`;
+            });
+
+            // Founders list
+            let foundersHtml = '';
+            (d.founders || []).forEach(f => {
+                foundersHtml += `
+                    <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+                        <div>
+                            <div class="fw-semibold small text-dark">${f.name}</div>
+                            <div class="text-muted" style="font-size:0.75rem;">${f.type === 'physical' ? 'Физическое лицо' : 'Юридическое лицо'}</div>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-primary bg-opacity-10 text-primary fw-bold">${f.share_percent}%</span>
+                            <div class="text-muted" style="font-size:0.75rem;">${formatCurrencyRub(f.share_rub || f.capital_rub)}</div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            // Affiliates list
+            let affHtml = '';
+            (d.affiliated_companies || d.affiliates || []).forEach(a => {
+                affHtml += `
+                    <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+                        <div>
+                            <div class="fw-semibold small text-dark">${a.name}</div>
+                            <div class="text-muted" style="font-size:0.75rem;">ИНН: ${a.inn} | Связь: ${a.relation_type || a.relation}</div>
+                        </div>
+                        <span class="badge bg-light text-secondary border">${a.status}</span>
+                    </div>
+                `;
+            });
+
+            // Licenses list
+            let licHtml = '';
+            (d.licenses || []).forEach(l => {
+                licHtml += `
+                    <div class="small mb-1 pb-1 border-bottom">
+                        <div class="fw-semibold text-dark">№ ${l.number} — ${l.activity || l.type}</div>
+                        <div class="text-muted" style="font-size:0.75rem;">Выдана: ${l.agency || l.issuer} (${l.date || l.date_issued})</div>
+                    </div>
+                `;
+            });
+
+            // Trademarks list
+            let tmHtml = '';
+            (d.trademarks || []).forEach(t => {
+                tmHtml += `
+                    <div class="small mb-1 pb-1 border-bottom">
+                        <div class="fw-semibold text-dark">«${t.name}» (Рег. № ${t.reg_number})</div>
+                        <div class="text-muted" style="font-size:0.75rem;">Действует до: ${t.expiry_date || t.valid_until} (${t.status})</div>
+                    </div>
+                `;
+            });
+
+            // Inspections list
+            let inspHtml = '';
+            const inspList = (d.inspections && d.inspections.recent_inspections) ? d.inspections.recent_inspections : (Array.isArray(d.inspections) ? d.inspections : []);
+            inspList.forEach(i => {
+                inspHtml += `
+                    <div class="small mb-1 pb-1 border-bottom">
+                        <div class="fw-semibold text-dark">${i.year} г. — ${i.agency || i.authority} (${i.type})</div>
+                        <div class="text-muted" style="font-size:0.75rem;">Результат: ${i.result}</div>
+                    </div>
+                `;
+            });
+
+            // Revenue and profit
+            const revLatest = fin.revenue_latest || fin.revenue_rub || 0;
+            const profitLatest = fin.profit_latest || fin.net_profit_rub || 0;
+            const assetsLatest = fin.assets_latest || fin.assets_rub || 0;
+            const netAssets = fin.net_assets || fin.net_assets_rub || 0;
+            const taxPaid = fin.taxes_paid_total || fin.taxes_paid_rub || 0;
+            const taxDebt = fin.tax_debt || fin.tax_debt_rub || 0;
+            const accBlocks = fin.account_blocks_count || 0;
+
+            const contractsCount = proc.supplier_contracts_count || proc.contracts_count || 0;
+            const contractsSum = proc.supplier_contracts_sum || proc.contracts_sum_rub || 0;
+            const inRnp = proc.in_rnp || proc.is_in_rnp || false;
+            const rnpStatus = proc.rnp_status || (inRnp ? 'В реестре недобросовестных поставщиков' : 'Не числится в РНП ФАС');
+
+            const totalCases = arb.total_cases || 0;
+            const casesPlaintiff = arb.plaintiff_count || arb.cases_as_plaintiff || 0;
+            const sumPlaintiff = arb.plaintiff_sum || arb.plaintiff_sum_rub || 0;
+            const casesDefendant = arb.defendant_count || arb.cases_as_defendant || 0;
+            const sumDefendant = arb.defendant_sum || arb.defendant_sum_rub || 0;
+
+            const fsspActive = fssp.active_proceedings_count || 0;
+            const fsspDebt = fssp.active_debt_sum || fssp.total_debt_rub || 0;
+
+            const primaryLead = leads.length > 0 ? leads[0] : null;
+            const leadName = primaryLead ? primaryLead.dm_full_name : lead.ceo_name;
+            const leadTitle = primaryLead ? primaryLead.dm_title : lead.ceo_title;
+            const leadEmail = primaryLead ? primaryLead.dm_email : `ceo@${sum.website || 'company.ru'}`;
+            const leadPhone = primaryLead ? primaryLead.dm_phone : '+7 (495) 739-70-00';
+
+            content.innerHTML = `
+                <!-- Главная шапка карточки -->
+                <div class="card-custom mb-4 border-0 shadow-sm">
+                    <div class="d-flex justify-content-between align-items-start flex-wrap gap-3 pb-3 border-bottom">
+                        <div>
+                            <div class="d-flex align-items-center gap-2 mb-1">
+                                <span class="badge bg-primary bg-opacity-10 text-primary fw-bold px-2 py-1">${sum.status_text || sum.status}</span>
+                                <span class="badge bg-light text-dark border">ЕГРЮЛ ФНС РФ</span>
+                                <span class="badge bg-light text-secondary border">Возраст бизнеса: ${sum.age_years} лет</span>
+                            </div>
+                            <h3 class="fw-bold text-dark mb-1">${sum.name}</h3>
+                            <div class="text-muted small">
+                                ИНН: <b class="text-dark font-monospace">${sum.inn}</b> | 
+                                КПП: <b class="text-dark font-monospace">${sum.kpp}</b> | 
+                                ОГРН: <b class="text-dark font-monospace">${sum.ogrn}</b>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <a href="/api/counterparty/export-excel/${sum.inn}" class="btn btn-success text-white btn-action shadow-sm">
+                                <i class="bi bi-file-earmark-excel"></i> Выгрузить Excel (.xlsx)
+                            </a>
+                            <a href="/api/counterparty/report-markdown/${sum.inn}" target="_blank" class="btn btn-outline-primary btn-action shadow-sm">
+                                <i class="bi bi-journal-text"></i> Markdown заключение
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Баннер светофора благонадежности -->
+                    <div class="rounded-3 p-3 my-3 ${bannerClass} shadow-sm">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <div class="d-flex align-items-center gap-3">
+                                <div class="rounded-circle bg-white text-dark p-3 fw-bold fs-3 text-center" style="width:64px; height:64px; line-height:36px; box-shadow:0 4px 10px rgba(0,0,0,0.1);">
+                                    ${score}
+                                </div>
+                                <div>
+                                    <h5 class="fw-bold mb-0">${scoreTitle} (Индекс надежности: ${score}/100)</h5>
+                                    <div class="small opacity-90">${scoreDesc}</div>
+                                </div>
+                            </div>
+                            <div>
+                                <span class="badge bg-white text-dark shadow-sm px-3 py-2 fw-bold">${sum.reliability_text || 'Оценка надежности'}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4 Ключевые метрики -->
+                    <div class="row g-3">
+                        <div class="col-md-3 col-6">
+                            <div class="p-3 bg-light rounded-3 border">
+                                <small class="text-muted d-block fw-semibold">Выручка (ГИР БО)</small>
+                                <span class="fw-bold fs-5 text-dark">${formatCurrencyRub(revLatest)}</span>
+                                <small class="text-success d-block" style="font-size:0.75rem;">Прибыль: ${formatCurrencyRub(profitLatest)}</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6">
+                            <div class="p-3 bg-light rounded-3 border">
+                                <small class="text-muted d-block fw-semibold">Госконтракты (ЕИС)</small>
+                                <span class="fw-bold fs-5 text-primary">${contractsCount} контрактов</span>
+                                <small class="text-muted d-block" style="font-size:0.75rem;">Сумма: ${formatCurrencyRub(contractsSum)}</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6">
+                            <div class="p-3 bg-light rounded-3 border">
+                                <small class="text-muted d-block fw-semibold">Суды (КАД Арбитр)</small>
+                                <span class="fw-bold fs-5 ${casesDefendant > 0 ? 'text-warning' : 'text-dark'}">${totalCases} дел</span>
+                                <small class="text-muted d-block" style="font-size:0.75rem;">Истец: ${casesPlaintiff} | Ответчик: ${casesDefendant}</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6">
+                            <div class="p-3 bg-light rounded-3 border">
+                                <small class="text-muted d-block fw-semibold">Долги ФССП</small>
+                                <span class="fw-bold fs-5 ${fsspActive > 0 ? 'text-danger' : 'text-success'}">${formatCurrencyRub(fsspDebt)}</span>
+                                <small class="text-muted d-block" style="font-size:0.75rem;">Производств: ${fsspActive}</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2 Колонки детального досье -->
+                <div class="row g-4">
+                    <!-- Левая колонка: Реквизиты, Руководство, Учредители, Связи, Лицензии -->
+                    <div class="col-lg-6">
+                        
+                        <!-- 1. Реквизиты и статус -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-card-checklist text-primary me-2"></i> Реквизиты и Регистрация (ФНС)</h6>
+                            <table class="table table-sm table-borderless small mb-0">
+                                <tbody>
+                                    <tr><td class="text-muted" style="width:38%;">Юридический адрес:</td><td class="fw-medium text-dark">${sum.address} ${sum.is_mass_address ? '<span class="badge bg-warning text-dark ms-1">Массовый адрес</span>' : '<span class="badge bg-success bg-opacity-10 text-success ms-1">Не массовый</span>'}</td></tr>
+                                    <tr><td class="text-muted">Дата регистрации:</td><td class="fw-medium text-dark">${sum.registration_date} (${sum.age_years} лет на рынке)</td></tr>
+                                    <tr><td class="text-muted">Уставный капитал:</td><td class="fw-bold text-dark">${formatCurrencyRub(sum.capital_rub)}</td></tr>
+                                    <tr><td class="text-muted">Основной ОКВЭД:</td><td class="fw-medium text-dark">${sum.okved} (${sum.okved_name})</td></tr>
+                                    <tr><td class="text-muted">Налоговый орган:</td><td class="fw-medium text-dark">${sum.tax_authority} (${sum.tax_system})</td></tr>
+                                    <tr><td class="text-muted">Среднесписочная числ.:</td><td class="fw-bold text-dark">${sum.employees_count} сотрудников</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- 2. Руководство и Учредители -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-people-fill text-primary me-2"></i> Руководство и Учредители (ЕГРЮЛ)</h6>
+                            <div class="p-3 bg-light rounded-3 mb-3 border">
+                                <div class="text-muted small fw-semibold">ГЕНЕРАЛЬНЫЙ ДИРЕКТОР</div>
+                                <div class="fw-bold text-dark fs-6 mb-1">${lead.ceo_name}</div>
+                                <div class="small text-muted mb-2">${lead.ceo_title} | ИНН: <span class="font-monospace">${lead.ceo_inn}</span></div>
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <span class="badge ${lead.is_disqualified ? 'bg-danger' : 'bg-success bg-opacity-10 text-success'}">
+                                        ${lead.is_disqualified ? '✗ Дисквалифицирован ФНС' : '✓ В реестре дисквалифицированных не числится'}
+                                    </span>
+                                    <span class="badge ${lead.is_mass_director ? 'bg-warning text-dark' : 'bg-light text-secondary border'}">
+                                        ${lead.is_mass_director ? 'Массовый руководитель' : 'Не массовый руководитель'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="fw-bold small text-dark mb-2">УЧРЕДИТЕЛИ / БЕНЕФИЦИАРЫ (${(d.founders || []).length})</div>
+                            <div class="mb-2">${foundersHtml}</div>
+                        </div>
+
+                        <!-- 3. Аффилированность и связи -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-diagram-3-fill text-primary me-2"></i> Аффилированность и Корпоративные связи (${(d.affiliated_companies || []).length})</h6>
+                            <div class="mb-0">${affHtml}</div>
+                        </div>
+
+                        <!-- 4. Лицензии, Товарные знаки и Проверки -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-patch-check-fill text-primary me-2"></i> Лицензии, Бренды и Проверки Генпрокуратуры</h6>
+                            
+                            <div class="mb-3">
+                                <div class="small fw-bold text-muted text-uppercase mb-1">Лицензии ведомств (${(d.licenses || []).length})</div>
+                                ${licHtml || '<span class="text-muted small">Лицензии не требуются</span>'}
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="small fw-bold text-muted text-uppercase mb-1">Товарные знаки Роспатента (${(d.trademarks || []).length})</div>
+                                ${tmHtml || '<span class="text-muted small">Товарные знаки отсутствуют</span>'}
+                            </div>
+
+                            <div>
+                                <div class="small fw-bold text-muted text-uppercase mb-1">Проверки ЕРКНМ Генпрокуратуры</div>
+                                ${inspHtml || '<span class="text-muted small">Проверки не проводились</span>'}
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Правая колонка: Финансы, Госзакупки, Суды, ФССП, Риск-факторы, Контакты ЛПР -->
+                    <div class="col-lg-6">
+                        
+                        <!-- 1. Финансовый анализ и Налоги -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-graph-up text-success me-2"></i> Бухгалтерская отчетность и Налоги (ГИР БО ФНС)</h6>
+                            <table class="table table-sm table-borderless small mb-3">
+                                <tbody>
+                                    <tr><td class="text-muted" style="width:40%;">Выручка за отчетный год:</td><td class="fw-bold text-dark fs-6">${formatCurrencyRub(revLatest)}</td></tr>
+                                    <tr><td class="text-muted">Чистая прибыль:</td><td class="fw-bold ${profitLatest >= 0 ? 'text-success' : 'text-danger'}">${formatCurrencyRub(profitLatest)}</td></tr>
+                                    <tr><td class="text-muted">Совокупные активы (Баланс):</td><td class="fw-medium text-dark">${formatCurrencyRub(assetsLatest)}</td></tr>
+                                    <tr><td class="text-muted">Чистые активы:</td><td class="fw-medium text-dark">${formatCurrencyRub(netAssets)}</td></tr>
+                                    <tr><td class="text-muted">Уплаченные налоги и взносы:</td><td class="fw-bold text-dark">${formatCurrencyRub(taxPaid)}</td></tr>
+                                    <tr><td class="text-muted">Налоговая задолженность:</td><td class="fw-bold ${taxDebt > 0 ? 'text-danger' : 'text-success'}">${formatCurrencyRub(taxDebt)}</td></tr>
+                                    <tr><td class="text-muted">Блокировки счетов (БАНКИНФОРМ):</td><td class="fw-bold ${accBlocks > 0 ? 'text-danger' : 'text-success'}">${accBlocks > 0 ? '✗ Имеются блокировки счетов (' + accBlocks + ')' : '✓ Блокировки банковских счетов отсутствуют'}</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- 2. Госзакупки и Тендеры -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-briefcase-fill text-warning me-2"></i> Участие в Госзакупках (44-ФЗ и 223-ФЗ)</h6>
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small text-muted">Выиграно госконтрактов:</span>
+                                <span class="fw-bold text-dark">${contractsCount} на сумму ${formatCurrencyRub(contractsSum)}</span>
+                            </div>
+                            <div class="mb-3">
+                                <span class="badge ${inRnp ? 'bg-danger' : 'bg-success bg-opacity-10 text-success'}">
+                                    ${rnpStatus}
+                                </span>
+                            </div>
+                            ${proc.top_customers && proc.top_customers.length > 0 ? `
+                                <div class="small fw-bold text-muted mb-1">Крупнейшие заказчики:</div>
+                                <ul class="list-unstyled small mb-0">
+                                    ${proc.top_customers.map(c => `<li class="py-1 border-bottom text-dark"><i class="bi bi-building me-1 text-primary"></i> ${c.name || c} (${formatCurrencyRub(c.sum_rub)})</li>`).join('')}
+                                </ul>
+                            ` : ''}
+                        </div>
+
+                        <!-- 3. Арбитраж и Исполнительные производства -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-hammer text-danger me-2"></i> Арбитражные дела и ФССП (КАД / Судебные приставы)</h6>
+                            <div class="row g-2 mb-3">
+                                <div class="col-6">
+                                    <div class="p-2 bg-light rounded border text-center">
+                                        <small class="text-muted d-block">В роли истца</small>
+                                        <span class="fw-bold text-success">${casesPlaintiff} дел (${formatCurrencyRub(sumPlaintiff)})</span>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="p-2 bg-light rounded border text-center">
+                                        <small class="text-muted d-block">В роли ответчика</small>
+                                        <span class="fw-bold ${casesDefendant > 0 ? 'text-danger' : 'text-dark'}">${casesDefendant} дел (${formatCurrencyRub(sumDefendant)})</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="p-3 bg-light rounded-3 border">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="small fw-semibold text-dark">Исполнительные производства (ФССП):</span>
+                                    <span class="fw-bold ${fsspActive > 0 ? 'text-danger' : 'text-success'}">${fsspActive} производств</span>
+                                </div>
+                                <div class="small text-muted">Сумма взысканий: <b>${formatCurrencyRub(fsspDebt)}</b> | Закрыто по ст. 46: <b>${fssp.has_article_46_terminations ? 'Да' : 'Нет'}</b></div>
+                            </div>
+                        </div>
+
+                        <!-- 4. Матрица светофора и риск-факторы -->
+                        <div class="card-custom mb-4">
+                            <h6 class="fw-bold mb-3 text-dark"><i class="bi bi-traffic-light-fill text-warning me-2"></i> Аналитическая матрица рисков (Traffic Light)</h6>
+                            
+                            <!-- Зеленые маркеры -->
+                            <div class="mb-3">
+                                <div class="small fw-bold text-success text-uppercase mb-2"><i class="bi bi-check-circle me-1"></i> Положительные факторы (${(rf.positive || []).length})</div>
+                                ${posHtml}
+                            </div>
+
+                            <!-- Желтые маркеры -->
+                            ${(rf.warnings || []).length > 0 ? `
+                                <div class="mb-3">
+                                    <div class="small fw-bold text-warning text-uppercase mb-2"><i class="bi bi-exclamation-triangle me-1"></i> Требует внимания (${rf.warnings.length})</div>
+                                    ${warnHtml}
+                                </div>
+                            ` : ''}
+
+                            <!-- Красные маркеры -->
+                            ${(rf.critical || []).length > 0 ? `
+                                <div>
+                                    <div class="small fw-bold text-danger text-uppercase mb-2"><i class="bi bi-x-octagon me-1"></i> Критические стоп-факторы (${rf.critical.length})</div>
+                                    ${negHtml}
+                                </div>
+                            ` : ''}
+                        </div>
+
+                        <!-- 5. Прямые контакты ЛПР для связи -->
+                        <div class="card-custom mb-4" style="background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%); border-color: #bfdbfe;">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h6 class="fw-bold text-primary mb-0"><i class="bi bi-person-lines-fill me-2"></i> Прямые контакты руководства (B2B Lead)</h6>
+                                <span class="badge bg-primary text-white">ЛПР верифицирован</span>
+                            </div>
+                            <div class="fw-bold text-dark fs-6 mb-1">${leadName}</div>
+                            <div class="text-muted small mb-3">${leadTitle}</div>
+                            <div class="row g-2 mb-3">
+                                <div class="col-sm-6">
+                                    <div class="p-2 bg-white rounded border">
+                                        <small class="text-muted d-block">Корпоративный Email</small>
+                                        <div class="d-flex align-items-center justify-content-between">
+                                            <span class="font-monospace fw-bold text-primary small">${leadEmail}</span>
+                                            <button class="btn btn-link btn-sm p-0 text-muted" onclick="copyToClipboard('${leadEmail}')"><i class="bi bi-clipboard"></i></button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-sm-6">
+                                    <div class="p-2 bg-white rounded border">
+                                        <small class="text-muted d-block">Телефон для связи</small>
+                                        <div class="d-flex align-items-center justify-content-between">
+                                            <span class="font-monospace fw-bold text-dark small">${leadPhone}</span>
+                                            <a href="https://wa.me/${leadPhone.replace(/[^0-9]/g, '')}" target="_blank" class="text-success small"><i class="bi bi-whatsapp"></i></a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary w-100 btn-action justify-content-center" onclick="switchToCrmTabAndFilter('${sum.inn}')">
+                                <i class="bi bi-people-fill"></i> Открыть в базе контактов CRM
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+            `;
+        }
+
+        function switchToCrmTabAndFilter(inn) {
+            const tabBtn = document.getElementById('crm-tab');
+            if (tabBtn) {
+                const tab = new bootstrap.Tab(tabBtn);
+                tab.show();
+                document.getElementById('filterQuery').value = inn;
+                applyFilters();
             }
         }
 
