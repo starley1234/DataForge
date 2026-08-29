@@ -36,6 +36,29 @@ class TestCounterpartyDataAggregator:
         assert len(data["risk_factors"]["positive"]) > 0
         assert len(data["risk_factors"]["critical"]) == 0
 
+    def test_build_dossier_tbank(self, aggregator):
+        data = aggregator.build_full_dossier("7710140679")
+        assert data is not None
+        assert data["summary"]["inn"] == "7710140679"
+        assert "ТБАНК" in data["summary"]["name"].upper()
+        assert data["finance"]["revenue_latest"] > 0
+        assert data["summary"]["capital_rub"] > 0
+
+    def test_build_dossier_with_none_fields(self, aggregator):
+        # Explicitly pass None for revenue_rub, employees_count, okved, etc.
+        data = aggregator.build_full_dossier("7799887766", {
+            "name": 'ООО "Тест Нон"',
+            "revenue_rub": None,
+            "employees_count": None,
+            "okved_name": None,
+            "website": None,
+            "decision_makers": None
+        })
+        assert data is not None
+        assert data["summary"]["inn"] == "7799887766"
+        assert data["summary"]["capital_rub"] >= 10000
+        assert data["finance"]["revenue_latest"] > 0
+
     def test_build_dossier_yandex(self, aggregator):
         data = aggregator.build_full_dossier("7736207543")
         assert data is not None
@@ -113,6 +136,14 @@ class TestCounterpartyApiEndpoints:
         assert data["summary"]["inn"] == "7707083893"
         assert data["summary"]["reliability_score"] > 0
         assert len(data["founders"]) > 0
+
+    def test_api_dossier_tbank(self, test_client):
+        res = test_client.get("/api/counterparty/dossier/7710140679")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["summary"]["inn"] == "7710140679"
+        assert "ТБАНК" in data["summary"]["name"].upper()
+        assert data["summary"]["capital_rub"] > 0
 
     def test_api_report_markdown(self, test_client):
         res = test_client.get("/api/counterparty/report-markdown/7736207543")
