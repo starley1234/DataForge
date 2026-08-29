@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "b2b-lead-enrichment-engine"
-version = "2.1.0"
-description = "Enterprise B2B Lead Finder, Enrichment & Decision Maker Intelligence Platform for Russian Markets"
+version = "2.2.0"
+description = "Enterprise B2B Lead Finder, Enrichment, Scoring & Decision Maker Intelligence Platform for Russian Markets"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [

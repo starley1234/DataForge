@@ -10,10 +10,12 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg2://postgres:postgres_pass@db:5432/leads_b2b
       - DADATA_API_KEY=${DADATA_API_KEY:-}
+      - API_SECRET_KEY=${API_SECRET_KEY:-}
       - HOST=0.0.0.0
       - PORT=8080
       - LOG_LEVEL=INFO
       - BATCH_CONCURRENCY=4
+      - ENABLE_METRICS=true
     depends_on:
       db:
         condition: service_healthy

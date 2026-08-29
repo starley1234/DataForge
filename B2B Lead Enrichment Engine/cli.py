@@ -5,17 +5,21 @@ from typing import Optional
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
+from rich.panel import Panel
 from rich.progress import track, Progress, SpinnerColumn, TextColumn, BarColumn
 
-from engine import EnrichmentEngine
-from email_generator import generate_email_permutations
-from validator import verify_email_full, normalize_phone
-from exporter import (
+from core.engine import EnrichmentEngine
+from core.email_generator import generate_email_permutations
+from core.validator import verify_email_full, normalize_phone
+from core.deliverability import analyze_domain_deliverability
+from core.exporter import (
     export_to_csv, export_to_excel, export_to_amocrm_csv,
-    export_to_bitrix24_csv, generate_outreach_email
+    export_to_bitrix24_csv, export_to_hubspot_csv, export_to_vcard,
+    generate_outreach_email, generate_cold_calling_script
 )
-from batch_processor import BatchProcessor
-from config import settings
+from core.nationwide_harvester import NationwideHarvester
+from core.batch_processor import BatchProcessor
+from core.config import settings
 
 console = Console()
 
@@ -29,9 +33,9 @@ def print_table_leads(leads, title="База данных ЛПР и контак
     table.add_column("Должность / Роль", style="yellow")
     table.add_column("Email", style="green")
     table.add_column("Статус Email", style="blue")
-    table.add_column("Телефон", style="cyan")
+    table.add_column("Телефон / Время", style="cyan")
     table.add_column("Регион", style="dim")
-    table.add_column("Доверие", justify="right", style="bold")
+    table.add_column("Скоринг", justify="right", style="bold")
 
     for l in leads:
         lead_id = str(l.get("id", "-"))
@@ -42,19 +46,21 @@ def print_table_leads(leads, title="База данных ЛПР и контак
         email = l.get("dm_email") or "-"
         estatus = l.get("email_status") or "-"
         phone = l.get("dm_phone") or "-"
+        tz = l.get("phone_timezone") or "MSK"
+        phone_display = f"{phone}\n[dim]{tz}[/dim]" if phone != "-" else "-"
         reg = l.get("region") or "-"
         score = f"{l.get('confidence_score', 50)}%"
 
         table.add_row(
             lead_id,
             inn,
-            comp[:30],
+            comp[:28],
             name,
             title_role,
             email,
             estatus,
-            phone,
-            reg[:20],
+            phone_display,
+            reg[:18],
             score
         )
 
@@ -63,31 +69,40 @@ def print_table_leads(leads, title="База данных ЛПР и контак
 
 def main():
     parser = argparse.ArgumentParser(
-        description="B2B Lead Enrichment Engine (Россия/СНГ) — Комплексный поиск, обогащение и валидация ЛПР",
+        description="B2B Lead Enrichment Engine (Enterprise Edition) — Комплексный поиск, скоринг и валидация ЛПР РФ",
         formatter_class=argparse.RawTextHelpFormatter
     )
 
     # Режимы работы
-    parser.add_argument("--demo", action="store_true", help="Запустить демонстрационный сбор и обогащение эталонной базы")
+    parser.add_argument("--harvest-all-russia", "--nationwide", action="store_true", help="Запустить непрерывный автопоиск всех организаций России (89 регионов)")
+    parser.add_argument("--limit", type=int, default=10000, help="Лимит организаций для сбора")
+    parser.add_argument("--region", type=str, default=None, help="Фильтр региона (например: Москва, Свердловская, Татарстан)")
+    parser.add_argument("--industry", type=str, default=None, help="Фильтр отрасли (например: ИТ, Торговля, Строительство, Банки)")
+    parser.add_argument("--auto-enrich-all", action="store_true", help="Автоматически собрать и обогатить предприятия РФ (без знания ИНН)")
+    parser.add_argument("--demo", action="store_true", help="Запустить сбор и обогащение эталонной корпоративной базы")
     parser.add_argument("--query", type=str, help="ИНН, ОГРН или наименование организации для поиска и обогащения")
     parser.add_argument("--inn", type=str, help="ИНН компании для прямого поиска")
-    parser.add_argument("--domain", type=str, help="Домен организации для сбора контактов и реквизитов с сайта")
-    parser.add_argument("--batch", type=str, help="Путь к файлу CSV или Excel с перечнем ИНН/доменов для пакетной обработки")
+    parser.add_argument("--domain", type=str, help="Домен организации для краулинга контактов и реквизитов")
+    parser.add_argument("--batch", type=str, help="Путь к файлу CSV или Excel со списком ИНН для пакетной обработки")
     parser.add_argument("--list", action="store_true", help="Показать сохраненные контакты из базы данных")
     parser.add_argument("--stats", action="store_true", help="Отобразить сводную аналитику базы данных")
     
     # Инструменты
     parser.add_argument("--generate-email", nargs=2, metavar=('ФИО', 'ДОМЕН'), help="Сгенерировать корпоративные шаблоны email")
     parser.add_argument("--check-email", type=str, help="Проверить MX DNS, синтаксис и доступность email")
-    parser.add_argument("--check-phone", type=str, help="Проверить и нормализовать номер телефона")
-    parser.add_argument("--outreach", type=int, metavar="LEAD_ID", help="Сгенерировать шаблон холодного письма для ЛПР по ID")
+    parser.add_argument("--check-phone", type=str, help="Проверить телефон (E.164, оператор, часовой пояс, окно звонка)")
+    parser.add_argument("--deliverability", type=str, help="Аудит доставляемости домена (MX, SPF, DMARC, DKIM, RBL)")
+    parser.add_argument("--outreach", type=int, metavar="LEAD_ID", help="Сгенерировать B2B холодное письмо для ЛПР по ID")
+    parser.add_argument("--call-script", type=int, metavar="LEAD_ID", help="Сгенерировать скрипт холодного звонка для ЛПР по ID")
     parser.add_argument("--reverify", action="store_true", help="Повторно проверить все MX DNS записи в базе")
 
     # Экспорт
     parser.add_argument("--export-csv", type=str, help="Экспорт текущей базы в CSV (UTF-8 с BOM)")
     parser.add_argument("--export-excel", type=str, help="Экспорт текущей базы в стилизованный Excel (.xlsx)")
-    parser.add_argument("--export-amocrm", type=str, help="Экспорт в CSV для импорта в amoCRM")
-    parser.add_argument("--export-bitrix24", type=str, help="Экспорт в CSV для импорта в Битрикс24")
+    parser.add_argument("--export-amocrm", type=str, help="Экспорт в CSV для amoCRM")
+    parser.add_argument("--export-bitrix24", type=str, help="Экспорт в CSV для Битрикс24")
+    parser.add_argument("--export-hubspot", type=str, help="Экспорт в CSV для HubSpot / Salesforce")
+    parser.add_argument("--export-vcard", type=str, help="Экспорт базы в формат vCard (.vcf)")
 
     # Запуск сервера
     parser.add_argument("--serve", action="store_true", help="Запустить Web-сервер и UI панель управления")
@@ -143,6 +158,19 @@ def main():
             console.print(f"  [cyan]{k}[/cyan]: {v}")
         return
 
+    if args.deliverability:
+        res = analyze_domain_deliverability(args.deliverability)
+        console.print(Panel(
+            f"[bold]Домен:[/bold] {res['domain']}\n"
+            f"[bold]Провайдер:[/bold] {res['provider']}\n"
+            f"[bold]MX Хост:[/bold] {res['mx_host']}\n"
+            f"[bold]SPF:[/bold] {res['spf_qualifier']} ({res['has_spf']})\n"
+            f"[bold]DMARC:[/bold] {res['dmarc_policy']} ({res['has_dmarc']})\n"
+            f"[bold]Deliverability Score:[/bold] [bold green]{res['deliverability_score']}/100[/bold green]",
+            title="[bold cyan]Аудит доставляемости домена[/bold cyan]"
+        ))
+        return
+
     if args.outreach:
         lead = engine.get_lead_by_id(args.outreach)
         if not lead:
@@ -155,28 +183,76 @@ def main():
         console.print("\n" + draft["body"])
         return
 
+    if args.call_script:
+        lead = engine.get_lead_by_id(args.call_script)
+        if not lead:
+            console.print(f"[red]Лид с ID {args.call_script} не найден в базе.[/red]")
+            return
+        script = generate_cold_calling_script(lead)
+        console.print(f"\n[bold green]═══ Скрипт холодного звонка: {lead['dm_full_name']} ({lead['company_name']}) ═══[/bold green]")
+        console.print(f"[bold yellow]1. Секретарский барьер:[/bold yellow]\n{script['gatekeeper_script']}\n")
+        console.print(f"[bold yellow]2. Открытие разговора с ЛПР (30-сек Hook):[/bold yellow]\n{script['intro_pitch']}\n")
+        console.print(f"[bold yellow]3. Закрытие на встречу:[/bold yellow]\n{script['closing']}\n")
+        return
+
     if args.reverify:
         console.print("[bold yellow]Запуск повторной MX-проверки всех email в базе...[/bold yellow]")
         cnt = engine.reverify_all_emails()
         console.print(f"[bold green]Успешно перепроверено {cnt} контактов.[/bold green]")
         return
 
-    if args.demo:
-        console.print("[bold blue]Запуск демонстрационного пайплайна сбора и обогащения эталонной базы...[/bold blue]")
-        mock_data = engine.mock_registry.get_all()
-        for comp in track(mock_data, description="Обогащение предприятий..."):
-            engine.enrich_company_and_dms(comp, scrape_web=False, verify_emails=True)
+    if args.harvest_all_russia:
+        import time
+        from rich.live import Live
+        from mass_harvester import create_status_layout
+
+        harvester = NationwideHarvester(engine=engine)
+        console.print(Panel(
+            f"[bold green]Запуск автопоиска предприятий по всей России![/bold green]\n"
+            f"Охват: [bold cyan]89 регионов РФ[/bold cyan] | [bold magenta]13 ключевых отраслей экономики[/bold magenta]\n"
+            f"Режим: [bold yellow]Непрерывный фоновый сбор с верификацией контактов и скорингом[/bold yellow]\n\n"
+            f"Для остановки и выгрузки нажмите [bold red]Ctrl+C[/bold red]",
+            title="[bold blue]DataForge Nationwide Engine[/bold blue]"
+        ))
+
+        harvester.start(region_code=args.region, industry_keyword=args.industry, max_limit=args.limit)
+
+        try:
+            with Live(console=console, screen=True, refresh_per_second=4) as live:
+                while harvester.is_running:
+                    stats = harvester.get_status()
+                    db_stats = engine.get_dashboard_stats()
+                    layout = create_status_layout(stats, db_stats["total_dms"], db_stats["total_companies"])
+                    live.update(layout)
+                    time.sleep(0.25)
+        except KeyboardInterrupt:
+            harvester.stop()
+            console.print("\n[bold yellow]Остановка сборщика... Сохранение базы...[/bold yellow]")
 
         leads = engine.get_all_leads()
+        if args.export_excel:
+            export_to_excel(leads, args.export_excel)
+            console.print(f"\n[bold green]✓ База экспортирована в {args.export_excel} ({len(leads)} лидов)![/bold green]")
+        if args.export_csv:
+            export_to_csv(leads, args.export_csv)
+        return
+
+    if args.auto_enrich_all or args.demo:
+        console.print("[bold blue]🚀 Автоматический сбор и обогащение всех предприятий РФ (без знания ИНН)...[/bold blue]")
+        enriched_comps = engine.enrich_all_known_companies(scrape_web=False, verify_emails=True)
+        leads = engine.get_all_leads()
+        console.print(f"[bold green]✓ Успешно собрано {len(enriched_comps)} предприятий и {len(leads)} контактов ЛПР![/bold green]")
         print_table_leads(leads)
 
         if args.export_csv:
             export_to_csv(leads, args.export_csv)
-            console.print(f"[bold green]Успешно экспортировано в {args.export_csv}[/bold green]")
-
+            console.print(f"[bold green]Экспорт в {args.export_csv}[/bold green]")
         if args.export_excel:
             export_to_excel(leads, args.export_excel)
-            console.print(f"[bold green]Успешно экспортировано в {args.export_excel}[/bold green]")
+            console.print(f"[bold green]Экспорт в {args.export_excel}[/bold green]")
+        if args.export_vcard:
+            export_to_vcard(leads, args.export_vcard)
+            console.print(f"[bold green]Экспорт в {args.export_vcard}[/bold green]")
         return
 
     if args.batch:
@@ -221,7 +297,7 @@ def main():
         return
 
     # Экспорт текущей базы без других команд
-    if args.export_csv or args.export_excel or args.export_amocrm or args.export_bitrix24:
+    if args.export_csv or args.export_excel or args.export_amocrm or args.export_bitrix24 or args.export_hubspot or args.export_vcard:
         leads = engine.get_all_leads()
         if args.export_csv:
             export_to_csv(leads, args.export_csv)
@@ -235,6 +311,12 @@ def main():
         if args.export_bitrix24:
             export_to_bitrix24_csv(leads, args.export_bitrix24)
             console.print(f"[bold green]Экспорт в Битрикс24: {args.export_bitrix24}[/bold green]")
+        if args.export_hubspot:
+            export_to_hubspot_csv(leads, args.export_hubspot)
+            console.print(f"[bold green]Экспорт в HubSpot: {args.export_hubspot}[/bold green]")
+        if args.export_vcard:
+            export_to_vcard(leads, args.export_vcard)
+            console.print(f"[bold green]Экспорт в vCard: {args.export_vcard}[/bold green]")
         return
 
     parser.print_help()

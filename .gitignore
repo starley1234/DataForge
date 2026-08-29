@@ -1,7 +1,94 @@
-/B2B Lead Enrichment Engine/__pycache__
-ai_contacts/data/ai_contacts.csv
-/ai_contacts/data
-/ai_contacts/src/__pycache__
-ai_contacts/data/ai_contacts.csv
-ai_contacts/data/ai_contacts.db
-/ai_contacts/data
+# ============================================================================
+# Python Bytecode & Cache
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ============================================================================
+# SQLite Databases & Data Storage (prevents git changes on runtime)
+# ============================================================================
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite
+**/data/*.db
+**/data/*.sqlite
+leads_b2b.db
+ai_contacts.db
+
+# ============================================================================
+# Generated Reports & Exports (CSV, Excel, vCard, JSON runtime outputs)
+# ============================================================================
+*.csv
+*.xlsx
+*.xls
+*.vcf
+leads_*.csv
+leads_*.xlsx
+leads_*.vcf
+export_*.csv
+export_*.xlsx
+
+# ============================================================================
+# Logs & Process Outputs
+# ============================================================================
+*.log
+logs/
+server.log
+uvicorn.log
+
+# ============================================================================
+# Environment & Secrets
+# ============================================================================
+.env
+.env.local
+.env.*.local
+venv/
+.venv/
+env/
+ENV/
+
+# ============================================================================
+# Testing & Coverage
+# ============================================================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================================
+# IDE & OS Specific
+# ============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

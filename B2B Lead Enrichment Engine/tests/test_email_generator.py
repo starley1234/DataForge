@@ -1,5 +1,5 @@
 import pytest
-from email_generator import (
+from core.email_generator import (
     generate_email_permutations,
     detect_pattern_from_sample,
     generate_department_emails,

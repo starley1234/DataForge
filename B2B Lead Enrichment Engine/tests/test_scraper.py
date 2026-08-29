@@ -1,6 +1,6 @@
 import pytest
 from bs4 import BeautifulSoup
-from scraper import WebsiteScraper
+from core.scraper import WebsiteScraper
 
 
 def test_extract_emails():
