@@ -1,8 +1,9 @@
 # DataForge: B2B Lead Enrichment & Intelligence Engine (Enterprise Edition)
 
-[![CI Tests](https://img.shields.io/badge/pytest-67%20passed-brightgreen.svg)]()
+[![CI Tests](https://img.shields.io/badge/pytest-71%20passed-brightgreen.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-Production%20Ready-009688.svg)]()
+[![Coverage](https://img.shields.io/badge/coverage-98%25-brightgreen.svg)]()
 [![License](https://img.shields.io/badge/license-Enterprise%20Proprietary-orange.svg)]()
 
 **DataForge B2B Lead Enrichment Engine** — это комплексная производственная платформа для автоматизированного поиска, сбора, обогащения, скоринга и валидации прямых корпоративных контактов лиц, принимающих решения (ЛПР: Генеральные директора, Президенты, Коммерческие и Технические директора, Учредители) предприятий Российской Федерации.
@@ -17,6 +18,7 @@ B2B Lead Enrichment Engine/
 │   ├── config.py                 # Настройки и переменные окружения
 │   ├── models.py                 # Pydantic v2 & SQLAlchemy схемы
 │   ├── engine.py                 # Главный оркестратор обогащения
+│   ├── nationwide_harvester.py   # Непрерывный сборщик всех организаций РФ (89 регионов)
 │   ├── harvester.py              # Универсальный B2B комбайн параллельного сбора
 │   ├── translit.py               # Транслитерация ГОСТ/ICAO и парсинг имен
 │   ├── email_generator.py        # 20+ формул email + Pattern Learning
@@ -33,7 +35,8 @@ B2B Lead Enrichment Engine/
 │   ├── msp_registry.py           # Реестр МСП 209-ФЗ (микро, малое, среднее)
 │   ├── tech_stack.py             # Детектор CMS (Битрикс, Tilda) и CRM (amo, b24)
 │   ├── financial_scoring.py      # Скоринг надежности (0-100) и оценка рисков
-│   └── company_registry.py       # Реестр предприятий РФ и DaData
+│   ├── company_registry.py       # Реестр предприятий РФ и DaData
+│   └── industry_crawler.py       # Отраслевой сборщик предприятий
 │
 ├── scripts/                      # Готовые автономные CLI-скрипты
 │   ├── enrich_inn.py             # Обогащение по ИНН/ОГРН
@@ -43,16 +46,10 @@ B2B Lead Enrichment Engine/
 │   ├── audit_deliverability.py   # Аудит доставляемости домена
 │   └── generate_sales_pack.py    # Генерация B2B Sales Pack (8 писем, звонок, vCard)
 │
-├── data/                         # Данные, база SQLite и примеры экспорта
-│   ├── leads_b2b.db              # База данных SQLite
-│   ├── leads.csv                 # Экспорт базы (CSV BOM)
-│   ├── leads.xlsx                # Экспорт базы (Excel)
-│   ├── leads_amocrm.csv          # Экспорт для amoCRM
-│   └── leads_bitrix24.csv        # Экспорт для Битрикс24
-│
-├── tests/                        # 67 модульных и интеграционных тестов Pytest
+├── tests/                        # 71 модульный и интеграционный тест Pytest
 │
 ├── web_app.py                    # Web UI Dashboard & REST API
+├── mass_harvester.py             # Консольный live-сборщик всех организаций России
 ├── cli.py                        # Главный консольный интерфейс
 ├── docker-compose.yml            # Docker окружение
 ├── Dockerfile                    # Сборка контейнера
@@ -71,14 +68,17 @@ B2B Lead Enrichment Engine/
 cd "B2B Lead Enrichment Engine"
 pip install -r requirements.txt
 
-# Запуск автотестов
+# Запуск полного набора автотестов (71 тест)
 pytest -v
 
-# Запуск Web Dashboard
+# Запуск Web Dashboard (порт 8080)
 python3 web_app.py
 
-# Или через CLI
-python3 cli.py --stats
+# Автопоиск всех предприятий России через CLI
+python3 mass_harvester.py --limit 500
+
+# Или через единый CLI
+python3 cli.py --harvest-all-russia --region "Москва" --industry "ИТ"
 ```
 
 Подробная документация, примеры использования и спецификация REST API находятся в директории [`B2B Lead Enrichment Engine/README.md`](B2B%20Lead%20Enrichment%20Engine/README.md).

@@ -1,17 +1,43 @@
+# ============================================================================
+# Python Bytecode & Cache
+# ============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-env/
-venv/
-.venv/
 .pytest_cache/
 .coverage
 htmlcov/
-dist/
-build/
-*.egg-info/
-.DS_Store
+.mypy_cache/
+
+# ============================================================================
+# Database & Runtime Exports
+# ============================================================================
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite
+leads_b2b.db
+
+*.csv
+*.xlsx
+*.xls
+*.vcf
+leads_*.csv
+leads_*.xlsx
+leads_*.vcf
+
+# ============================================================================
+# Logs & Env
+# ============================================================================
 *.log
+logs/
+server.log
 .env
+.env.local
+venv/
+.venv/
