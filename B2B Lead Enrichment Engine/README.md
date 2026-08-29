@@ -133,6 +133,9 @@ B2B Lead Enrichment Engine/
 
 ---
 
+py -m venv .venv
+.venv\Scripts\activate
+
 ## Быстрый старт
 
 ### 1. Установка зависимостей
